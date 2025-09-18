@@ -22,7 +22,7 @@ class PyMooSolver(Solver):
         self.verbose = verbose
         self.kwargs = kwargs
 
-    def solve(self, model, classifier, density_estimator, X_orig, y_target):
+    def solve(self, model, classifier, density_estimator, X_orig, y_target, seed = 0):
         X_np = X_orig.detach().cpu().numpy()
         n, d = X_np.shape
         flatten_params = np.concatenate([p.detach().numpy().flatten() for p in model.parameters()])
@@ -45,7 +45,7 @@ class PyMooSolver(Solver):
                 wasserstein = np.mean(np.linalg.norm(diff, axis=-1, ord=2))
 
                 # Lipschitz proxy
-                f2 = model.lipschitz_proxy()
+                f2 = model.lipschitz_proxy(X_orig)
 
                 # Objective 3: -density
                 #log_probs = density_estimator.score_samples(X_prime_t.detach().cpu().numpy())
@@ -76,7 +76,7 @@ class PyMooSolver(Solver):
             problem,
             self.algorithm,
             termination=self.termination,
-            seed=1,
+            seed=seed,
             verbose=self.verbose,
             **self.kwargs
         )
