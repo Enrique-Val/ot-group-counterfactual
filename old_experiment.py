@@ -23,8 +23,7 @@ from group_cfx.transforms.functional_transforms import FullAffine, LowRankAffine
 from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform
 from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianPolynomialTransform
 from group_cfx.transforms.utils import bi_lipschitz_metric
-from utils import synthetic_2d, train_classifier, print_plot_solutions, get_openml_dataset, train_gbt, train_lg, \
-    cross_experiment
+from utils import synthetic_2d, train_classifier, print_plot_solutions, get_openml_dataset, train_gbt, train_lg
 
 from sklearn.model_selection import GridSearchCV
 from sklearn.linear_model import LogisticRegression
@@ -308,40 +307,123 @@ if __name__ == "__main__":
                 transform.fit_prior(X_sub)
             transform.to(device)
 
-            linear = True
-            if linear :
+            exact = True
+            if exact :
                 K = 1.1
-                y_prime_conf = 0.9
+                t0 = time.time()
                 if args.transform == "DirectOptimization":
-                    t0 = time.time()
-                    pv = transform.pyomo_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=y_prime_conf, K = K, bilipschitz=True,solver = 'ipopt')
-                    tn = time.time()
-
-                    with torch.no_grad :
-                        X_sub_transformed = transform(X_sub.to(device)).cpu().numpy()
-                    wass = np.mean(np.linalg.norm(X_sub_transformed - X_sub.numpy(), axis= -1, ord=2))
-                    time = tn - t0
+                    pv = transform.pyomo_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=0.9, K = K, bilipschitz=True,solver = 'ipopt')
                 else :
-                    wass, time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K, solver = cv.SCS)
+                    pv = transform.cvxpy_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=0.9, K = K, solver = cv.SCS)
+                tn = time.time()
+                print("QP solving time:", tn - t0)
 
-            # Non linear using Pymoo
+                fig = plt.figure()
+                ax = fig.gca()
+                # Plot original points
+                ax.scatter(X_sub[:, fet1], X_sub[:, fet2], color='blue', label='Original', alpha=0.5)
+                # Plot transformed points
+                with torch.no_grad():
+                    X_transformed = transform(X_sub.to(device)).cpu().numpy()
+                # Print Wasserstein distance of transformed points
+                wass = np.mean(np.linalg.norm(X_transformed - X_sub.numpy(), axis=-1, ord=2))
+                print("Wasserstein distance of QP solution:", wass)
+                # print empirical Lipschitz constant
+                lip = 1-bi_lipschitz_metric(X_sub, torch.tensor(X_transformed, dtype=torch.float32))
+                print("Empirical Lipschitz constant of QP solution:", lip)
+                # Real Bilipschitz (bigger and smaller singular value of A)
+                if args.transform == "FullAffine":
+                    U, S, Vt = np.linalg.svd(transform.A.detach().cpu().numpy())
+                    print("Real Bilipschitz constant of QP solution:", S[0], S[-1])
+
+                ax.scatter(X_transformed[:, fet1], X_transformed[:, fet2], color='orange', label='Transformed', alpha=0.5)
+                # Set lims to 0,1
+                if x_lims[0] is not None and x_lims[1] is not None:
+                    ax.set_xlim(x_lims[0], x_lims[1])
+                if y_lims[0] is not None and y_lims[1] is not None:
+                    ax.set_ylim(y_lims[0], y_lims[1])
+
+                # Plot arrows
+                for j in range(X_sub.shape[0]):
+                    ax.arrow(X_sub[j, fet1], X_sub[j, fet2], X_transformed[j, fet1] - X_sub[j, fet1],
+                             X_transformed[j, fet2] - X_sub[j, fet2],
+                             head_width=0.01, head_length=0.01, fc='gray', ec='gray', alpha=0.3)
+                ax.set_title(f"QP solution for cluster {i} (transform {args.transform})")
+                ax.legend()
+                plt.show()
+
+                #raise Exception("Stop")
+
+
+            t0 = time.time()
+            X_prime, res_f, res_x = solver.solve(transform, f, de, X_sub, y_prime=y_prime, seed=args.random_seed)
+            tn = time.time()
+            print("Solver time:", tn - t0)
+
+            if res_f is not None:
+                # Order solutions by f2 values
+                order = np.argsort([i[1] for i in res_f])
+                res_f = [res_f[i] for i in order]
+                res_x = [res_x[i] for i in order]
+
+                # Compute also the Lipschitz values
+                lip_real = np.zeros(len(res_x))
+                for j in range(len(res_x)):
+                    transform.load_parameters(res_x[j])
+                    with torch.no_grad():
+                        lip = bi_lipschitz_metric(X_sub, transform(X_sub))
+                    # Convert to 1-Lipschitz
+                    lip_real[j] = lip
+                res_f = np.hstack([res_f, lip_real.reshape(-1,1)])
+
+                X_sub_test = X_sub_list_test[i]
+                # To tensor
+                X_sub_test = torch.tensor(X_sub_test, dtype=torch.float32)
+                # If the transform is NOT DirectOptimization, forward the test sample and obtain Wasserstein and Lipschitz
+                if not args.transform == 'DirectOptimization' and len(X_sub_list_test) > i:
+                    res_f_test = np.zeros((len(res_x), 2))
+                    for j in range(len(res_x)):
+                        transform.load_parameters(res_x[j])
+                        with torch.no_grad():
+                            X_sub_test_prime = transform(X_sub_test.to(device))
+                        # Wasserstein
+                        diff = (X_sub_test_prime - X_sub_test).cpu().numpy()
+                        wasserstein = np.mean(np.linalg.norm(diff, axis=-1, ord=2))
+                        res_f_test[j, 0] = wasserstein
+                        # Empirical test Lipschitz
+                        lip = bi_lipschitz_metric(X_sub_test, X_sub_test_prime)
+                        res_f_test[j, 1] = lip
+                    print("Test set results (Wasserstein, Lipschitz proxy, Lipschitz):")
+                    print(res_f_test)
+                else:
+                    # Fill with nans
+                    res_f_test = np.full((len(res_x), 2), np.nan)
+
+
+                # Store results in a dataframe
+                df_results = pd.DataFrame(np.hstack([res_f, res_f_test]), columns=['Wasserstein', 'Lipschitz proxy', 'Lipschitz', 'Wasserstein test', 'Lipschitz test'])
+
+                if args.verbose:
+                    if args.transform == 'DirectOptimization':
+                        X_sub_test = None
+
+                    print_plot_solutions(res_f, res_x, transform, X_sub, X_sub_test, n_pics=4, x_lims=x_lims,
+                                         y_lims=y_lims,
+                                         fets=(fet1, fet2), exec_time=tn - t0)
+
+            # No covergence, empty dataset
             else :
-                if args.transform == "DirectOptimization":
-                    t0 = time.time()
-                    df_results, time = solver.solve(transform, f, X_sub.to(device), y_prime, y_prime_confidence=0.9,
-                                      seed=args.random_seed)
-                    tn = time.time()
-                else :
-                    t0 = time.time()
-                    df_results, time = solver.solve(transform, f, X_sub.to(device), y_prime, y_prime_confidence=0.9,
-                                      seed=args.random_seed)
-                    tn = time.time()
+                df_results = pd.DataFrame(columns=['Wasserstein', 'Lipschitz proxy', 'Lipschitz', 'Wasserstein test', 'Lipschitz test'])
             # Save to csv
             file_name = os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv')
             #df_results.to_csv(file_name, index=False)
 
+            print("Time", tn-t0)
+
             # Store exec time
-            df_time.loc[(y_orig, i), 'exec_time'] = time
+            df_time.loc[(y_orig, i), 'exec_time'] = tn - t0
+
+            raise Exception("Stop after 1 cluster")
 
 
     # Save exec time dataframe

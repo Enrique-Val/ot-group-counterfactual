@@ -4,6 +4,8 @@ from pymoo.optimize import minimize
 from pymoo.core.problem import ElementwiseProblem
 
 from group_cfx.solver.abstract_solver import Solver
+from group_cfx.transforms.functional_transforms import BaseTransform
+from group_cfx.transforms.probabilistic_transforms import ProbabilisticTransform
 
 
 # -------------------
@@ -22,14 +24,14 @@ class PyMooSolver(Solver):
         self.verbose = verbose
         self.kwargs = kwargs
 
-    def solve(self, model, classifier, density_estimator, X_orig, y_target, seed = 0):
+    def solve(self, model : BaseTransform, classifier, X_orig, y_prime, y_prime_confidence, seed = 0):
         X_np = X_orig.detach().cpu().numpy()
         n, d = X_np.shape
         flatten_params = np.concatenate([p.detach().numpy().flatten() for p in model.parameters()])
 
         class SubgroupProblem(ElementwiseProblem):
             def __init__(self, min_acc=0.9, xl=-2.0, xu=2.0):
-                super().__init__(n_var=len(flatten_params), n_obj=2, n_constr=2, xl=xl, xu=xu)
+                super().__init__(n_var=len(flatten_params), n_obj=2, n_constr=X_orig.shape[0], xl=xl, xu=xu)
                 self.min_acc = min_acc
 
             def _evaluate(self, x, out, *args, **kwargs):
@@ -40,35 +42,28 @@ class PyMooSolver(Solver):
 
                 X_prime_t = model(X_orig)
 
-                # Wasserstein proxy: mean pairwise L2
-                diff = X_prime_t.detach().cpu().numpy() - X_np
-                wasserstein = np.mean(np.linalg.norm(diff, axis=-1, ord=2))
-
-                # Lipschitz proxy
-                f2 = model.lipschitz_proxy(X_orig)
-
-                # Objective 3: -density
-                #log_probs = density_estimator.score_samples(X_prime_t.detach().cpu().numpy())
-                #density = np.mean(log_probs)
-                density = 0
-
+                if isinstance(model, ProbabilisticTransform):
+                    wasserstein = model.wasserstein_projection_distance()
+                    # Lipschitz proxy
+                    f2 = model.lipschitz_proxy()
+                else :
+                    wasserstein = model.wasserstein_projection_distance(X_orig)
+                    # Lipschitz proxy
+                    f2 = model.lipschitz_proxy(X_orig)
 
                 # Constraint 1: classification accuracy
                 if isinstance(classifier, torch.nn.Module):
                     with torch.no_grad():
                         logits = classifier(X_prime_t)
-                        preds = logits.argmax(1).cpu().numpy()
-                    acc = (preds == y_target).mean()
+                        probs_y_target = torch.sigmoid(logits)
                 else:
                     preds = classifier.predict_proba(X_prime_t.detach().cpu().numpy())
-                    probs_y_target = preds[:, y_target]
-                    mse = np.mean((probs_y_target - 1) ** 2)
+                    probs_y_target = preds[:, y_prime]
 
-                g1 = mse - (1-self.min_acc)
-                g2 = -density-148
+                g1 = self.min_acc - probs_y_target
 
                 out["F"] = [wasserstein,f2]
-                out["G"] = [g1,g2]
+                out["G"] = g1
 
         problem = SubgroupProblem(min_acc=self.min_acc, xl = model.xl, xu =model.xu)
 
