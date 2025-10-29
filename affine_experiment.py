@@ -225,7 +225,7 @@ if __name__ == "__main__":
 
             if args.math_opt :
                 solver = cv.MOSEK if not args.transform in ["DirectOptimization","FullAffine"] else "gurobi"
-                K_list = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+                K_list = [2.0, 2.5, 3.0, 3.5, 4.0]
                 wass_list = []
                 time_list = []
                 for K in K_list :

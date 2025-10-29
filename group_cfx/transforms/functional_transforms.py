@@ -206,7 +206,7 @@ class SymmetricPSDAffine(BaseTransform):
         n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
 
         # Decision variables
-        A = cp.Variable((d, d), symmetric=True)
+        A = cp.Variable((d, d), symmetric=True, PSD=True)
         b = cp.Variable(d)
 
         # Compute fX
