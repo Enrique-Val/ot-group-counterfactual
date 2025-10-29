@@ -231,7 +231,7 @@ class SymmetricPSDAffine(BaseTransform):
 
         # Solve the QP
         prob = cp.Problem(objective, constraints)
-        prob.solve(solver=solver)
+        prob.solve(solver=solver, verbose=True)
         if prob.status != cp.OPTIMAL:
             print("Warning: QP did not converge to optimal solution")
         # Update parameters

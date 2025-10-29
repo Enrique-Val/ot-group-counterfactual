@@ -21,6 +21,8 @@ from group_cfx.transforms.gaussian_transforms import GaussianTransform, Gaussian
 from utils import synthetic_2d, get_openml_dataset, train_lg, \
     cross_experiment, cross_experiment_pymoo
 
+from sklearn_extra.cluster import KMedoids
+
 
 import joblib
 
@@ -37,7 +39,7 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type=str, default='./results', help='Output directory')
     parser.add_argument('--device', type=str, default='cpu', help='Device to use (cpu or cuda)')
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed for reproducibility')
-    parser.add_argument('--n_clusters', type=int, default=10, help='Number of clusters for subgrouping')
+    parser.add_argument('--n_clusters', type=int, default=5, help='Number of clusters for subgrouping')
     parser.add_argument('--transform', type=str, default='FullAffine', help='Type of transform to use',
                         choices=['FullAffine', 'FullAffine_proxy', 'SymmetricPSDAffine', 'SymmetricPSDAffine_proxy', 'DiagonalAffine',
                                  'DirectOptimization',
@@ -167,7 +169,7 @@ if __name__ == "__main__":
         sub_data = sub_data[probs < 1 - conf_selection]'''
 
         # Use kmeans clustering (sklearn)
-        cluster_alg = KMeans(n_clusters=args.n_clusters, random_state=args.random_seed)
+        cluster_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
         cluster_labels = cluster_alg.fit_predict(sub_data)
 
         # Get "sub" datasets for each cluster
