@@ -42,6 +42,10 @@ class BaseTransform(nn.Module):
                         bilipschitz = False) -> float:
             raise NotImplementedError("Pyomo solving not implemented for this transform.")
 
+    def is_cvx(self):
+        return False
+
+
 class FullAffine(BaseTransform):
     def __init__(self, d, blp_proxy = True):
         super().__init__()
@@ -194,6 +198,9 @@ class SymmetricPSDAffine(BaseTransform):
                 lipschitz = np.min([1/lipschitz_upper, lipschitz_lower])
             return 1-lipschitz
 
+    def is_cvx(self):
+        return True
+
     def cvxpy_solving(self, x : np.ndarray, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
                       K =1.1, solver = cp.MOSEK) -> cp.Problem:
         n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
@@ -251,6 +258,9 @@ class DiagonalAffine(BaseTransform):
         lipschitz_lower = self.A_diag.min().item()
         lipschitz = np.min([1/lipschitz_upper, lipschitz_lower])
         return 1-lipschitz
+
+    def is_cvx(self):
+        return True
 
     def cvxpy_solving(self, x : np.ndarray, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
                       K =1.1, solver = cp.MOSEK) -> cp.Problem:

@@ -16,7 +16,8 @@ from group_cfx.solver.pymoo_solver import PyMooSolver
 from group_cfx.transforms.functional_transforms import FullAffine, DirectOptimization, \
     DiagonalAffine, SymmetricPSDAffine
 from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform
-from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianCommutativeTransform
+from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianCommutativeTransform, \
+    GaussianScaleTransform
 from utils import synthetic_2d, get_openml_dataset, train_lg, \
     cross_experiment, cross_experiment_pymoo
 
@@ -174,9 +175,8 @@ if __name__ == "__main__":
         for c in np.unique(cluster_labels):
             X_c = sub_data[cluster_labels == c]
             # If len X_c < 100, raise an Exception
-            '''if X_c.shape[0] < 50:
-                raise ValueError(f"Cluster {c} has less than 100 samples ({X_c.shape[0]} samples) using confidence"
-                                 f" {conf_selection}. Decrease confidence selection.")'''
+            if X_c.shape[0] < 10:
+                raise ValueError(f"Cluster {c} has less than 100 samples ({X_c.shape[0]} samples)")
 
             X_sub_list.append(torch.tensor(X_c, dtype=torch.float32))
 
@@ -205,6 +205,8 @@ if __name__ == "__main__":
                 transform = GaussianCommutativeTransform(d)
             elif args.transform == 'GaussianTransform':
                 transform = GaussianTransform(d)
+            elif args.transform == 'GaussianScaleTransform':
+                transform = GaussianScaleTransform(d)
             elif args.transform == 'GMMForwardTransform':
                 transform = GMMForwardTransform(d, n_components=3)
             else:
@@ -215,12 +217,12 @@ if __name__ == "__main__":
             transform.to(device)
 
             if args.math_opt and args.transform not in ['FullAffine', 'SymmetricPSDAffine', 'DiagonalAffine',
-                                                      'CommutativeGaussianTransform', 'GaussianScaleTransform',
+                                                      'GaussianCommutativeTransform', 'GaussianScaleTransform',
                                                       'DirectOptimization']:
                 raise ValueError("Linear solver cannot be used with transform " + args.transform)
 
             if args.math_opt :
-                solver = cv.SCS if not args.transform in ["DirectOptimization","FullAffine"] else "gurobi"
+                solver = cv.MOSEK if not args.transform in ["DirectOptimization","FullAffine"] else "gurobi"
                 K_list = [1.1, 1.5, 2.0, 2.5, 3.0]
                 wass_list = []
                 time_list = []

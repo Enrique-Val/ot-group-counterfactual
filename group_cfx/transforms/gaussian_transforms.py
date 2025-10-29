@@ -116,6 +116,9 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
                                       self.prior_eigenvectors.T)
         self.posterior_mvn = multivariate_normal(mean= self.prior_mvn.mean + self.posterior_mu_offset.detach().cpu().numpy(), cov=covariance_matrix_posterior)
 
+    def is_cvx(self):
+        return True
+
     def cvxpy_solving(self, x : np.ndarray, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
                       K =1.1, solver = cp.MOSEK) -> float:
         # Convert x to numpy if it's a torch tensor
@@ -233,6 +236,9 @@ class GaussianScaleTransform(BaseGaussianTransform) :
 
     def lipschitz_proxy(self, X_orig):
         return self.scaling.item() - 1.0
+
+    def is_cvx(self):
+        return True
 
     def cvxpy_solving(self, x: np.ndarray, model: sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
                       K=1.1, solver = cp.MOSEK) -> float:
