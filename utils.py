@@ -119,7 +119,8 @@ def train_lg(X, y, scoring = "accuracy", random_state = 0, max_iter = 100):
         'solver': ['saga', 'liblinear'],
     }
 
-    grid = GridSearchCV(LogisticRegression(random_state = random_state, max_iter = max_iter), param_grid, cv=10, scoring= scoring)
+    grid = GridSearchCV(LogisticRegression(random_state = random_state, max_iter = max_iter), param_grid, cv=10,
+                        scoring= scoring, n_jobs=10)
     grid.fit(X, y)
 
     # Train another grid with elasticnet penalty
@@ -130,7 +131,8 @@ def train_lg(X, y, scoring = "accuracy", random_state = 0, max_iter = 100):
         'l1_ratio': [0.1, 0.3, 0.5, 0.7, 0.9]
     }
 
-    grid_en = GridSearchCV(LogisticRegression(random_state = random_state, max_iter = max_iter), param_grid, cv=10, scoring= scoring)
+    grid_en = GridSearchCV(LogisticRegression(random_state = random_state, max_iter = max_iter), param_grid, cv=10,
+                           scoring= scoring, n_jobs=10)
     grid_en.fit(X, y)
 
     if grid_en.best_score_ > grid.best_score_:
