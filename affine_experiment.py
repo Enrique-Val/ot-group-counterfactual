@@ -82,8 +82,8 @@ if __name__ == "__main__":
     X, y = sklearn.utils.shuffle(X, y, random_state=args.random_seed)
     # Divide into train and test
     split_idx = int(0.2 * X.shape[0])
-    X_test, y_test = X[split_idx:], y[split_idx:]
-    X, y = X[:split_idx], y[:split_idx]
+    X_test, y_test = X[:split_idx], y[:split_idx]
+    X, y = X[split_idx:], y[split_idx:]
 
 
     # ============================
@@ -183,7 +183,7 @@ if __name__ == "__main__":
             X_sub_list.append(torch.tensor(X_c, dtype=torch.float32))
 
         # Confidence for y_prime
-        y_prime_conf = 0.9
+        y_prime_conf = 0.8
 
 
         # ============================
@@ -225,7 +225,7 @@ if __name__ == "__main__":
 
             if args.math_opt :
                 solver = cv.MOSEK if not args.transform in ["DirectOptimization","FullAffine"] else "gurobi"
-                K_list = [1.1, 1.5, 2.0, 2.5, 3.0]
+                K_list = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
                 wass_list = []
                 time_list = []
                 for K in K_list :
