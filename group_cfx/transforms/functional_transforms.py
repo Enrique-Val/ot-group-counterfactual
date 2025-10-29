@@ -35,7 +35,7 @@ class BaseTransform(nn.Module):
         return torch.mean(torch.norm(self.forward(X_orig) - X_orig, dim=1)).item()
 
     def cvxpy_solving(self, x : np.ndarray, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
-                      K =1.1) -> float:
+                      K =1.1, solver = cp.SCS) -> float:
         raise NotImplementedError("CVXPY solving not implemented for this transform.")
 
     def pyomo_solving(self, x, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence, K =1.1,
