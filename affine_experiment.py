@@ -5,29 +5,21 @@ import numpy as np
 import pandas as pd
 import sklearn
 from pymoo.algorithms.moo.nsga2 import NSGA2
-from pymoo.termination import get_termination
-from pymoo.operators.mutation.pm import PolynomialMutation
 import torch
 import matplotlib.pyplot as plt
 import os
 
 from pymoo.termination.default import DefaultMultiObjectiveTermination
-from scipy.stats import multivariate_normal
 from sklearn.cluster import KMeans
 
-from group_cfx.solver.pymoo_lm_solver import PyMooLMSolver
 from group_cfx.solver.pymoo_solver import PyMooSolver
-from group_cfx.solver.sgd_solver import SGDSolver
-from group_cfx.transforms.functional_transforms import FullAffine, LowRankAffine, SmallMLP, DirectOptimization, \
-    DiagonalAffine
+from group_cfx.transforms.functional_transforms import FullAffine, DirectOptimization, \
+    DiagonalAffine, SymmetricPSDAffine
 from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform
-from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianPolynomialTransform
-from group_cfx.transforms.utils import bi_lipschitz_metric
-from utils import synthetic_2d, train_classifier, print_plot_solutions, get_openml_dataset, train_gbt, train_lg, \
-    cross_experiment
+from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianCommutativeTransform
+from utils import synthetic_2d, get_openml_dataset, train_lg, \
+    cross_experiment, cross_experiment_pymoo
 
-from sklearn.model_selection import GridSearchCV
-from sklearn.linear_model import LogisticRegression
 
 import joblib
 
@@ -44,20 +36,26 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type=str, default='./results', help='Output directory')
     parser.add_argument('--device', type=str, default='cpu', help='Device to use (cpu or cuda)')
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed for reproducibility')
-    parser.add_argument('--n_clusters', type=int, default=5, help='Number of clusters for subgrouping')
+    parser.add_argument('--n_clusters', type=int, default=10, help='Number of clusters for subgrouping')
     parser.add_argument('--transform', type=str, default='FullAffine', help='Type of transform to use',
-                        choices=['FullAffine', 'LowRankAffine', 'SmallMLP', 'DirectOptimization',
-                                 'GaussianPolynomialTransform', 'GaussianTransform', 'GMMForwardTransform'])
+                        choices=['FullAffine', 'FullAffine_proxy', 'SymmetricPSDAffine', 'SymmetricPSDAffine_proxy', 'DiagonalAffine',
+                                 'DirectOptimization',
+                                 'GaussianCommutativeTransform', 'GaussianTransform', 'GaussianScaleTransform',
+                                 'GMMForwardTransform'])
+    parser.add_argument('--math_opt', action='store_true', help='Use mathematical optimization')
+    parser.add_argument('--only_train', action='store_true', help='Only train the classifier and density estimator')
     args = parser.parse_args()
 
-    args.data_id = 44091
-    args.transform = 'FullAffine'
+    t0 = time.time()
 
     # Create output directory if it does not exist
-    dir_path = os.path.join(args.output_dir, str(args.n_clusters), f"data_{args.data_id}")
-    transform_path = os.path.join(dir_path, args.transform)
+    data_path = os.path.join(args.output_dir, f"data_{args.data_id}")
+    models_path = os.path.join(data_path, "models")
+    transform_path = os.path.join(data_path,str(args.n_clusters), "math_opt" if args.math_opt else "heuristic", args.transform)
     if not os.path.exists(transform_path):
         os.makedirs(transform_path)
+    if not os.path.exists(models_path):
+        os.makedirs(models_path)
 
 
     # ============================
@@ -79,11 +77,11 @@ if __name__ == "__main__":
 
     # Shuffle X and y
     X, y = sklearn.utils.shuffle(X, y, random_state=args.random_seed)
+    # Divide into train and test
+    split_idx = int(0.2 * X.shape[0])
+    X_test, y_test = X[split_idx:], y[split_idx:]
+    X, y = X[:split_idx], y[:split_idx]
 
-    # Leave 20% of data for testing
-    n_test = int(0.2 * X.shape[0])
-    X_test, y_test = X[:n_test], y[:n_test]
-    X, y = X[n_test:], y[n_test:]
 
     # ============================
     # Step 2: Torch classifier f and density estimator de
@@ -102,39 +100,27 @@ if __name__ == "__main__":
     '''
 
     # Load model if it exists
-    if os.path.exists(os.path.join(dir_path, "lg.pkl")) :
-        f = joblib.load(os.path.join(dir_path, "lg.pkl"))
-        print("Loaded model from", os.path.join(dir_path, "lg.pkl"))
+    if os.path.exists(os.path.join(models_path, "lg.pkl")) and not args.only_train:
+        f = joblib.load(os.path.join(models_path, "lg.pkl"))
+        print("Loaded model from", os.path.join(models_path, "lg.pkl"))
         print("Best validation accuracy:", f.score(X, y))
 
     else :
         # Train a logistic regression model
         scoring = "f1_macro"
-        f, params, score = train_lg(X, y, scoring=scoring, random_state=args.random_seed, max_iter = 1000)
+        f, params, score = train_lg(X, y, scoring=scoring, random_state=args.random_seed, max_iter = 10000)
 
         # Pickle model to file
-        joblib.dump(f, os.path.join(dir_path, "lg.pkl"))
+        joblib.dump(f, os.path.join(models_path, "lg.pkl"))
 
         # Save the training results (param and score) to a text file
-        with open(os.path.join(dir_path, "lg_params.txt"), "w") as file :
+        with open(os.path.join(models_path, "lg_params.txt"), "w") as file :
             file.write(f"Best validation {scoring}: {score}\n")
             file.write(f"Best parameters: {params}\n")
 
-
-
-
-    # Subsample 1000 instances for density estimator
-    '''
-    X_de = X[:500, :]
-
-    de = sklearn.neighbors.KernelDensity(kernel='gaussian', bandwidth=2)
-    de.fit(X_de)
-    print(np.mean(de.score_samples(X[1000:])))
-    print(np.std(de.score_samples(X[1000:])))
-    print(np.quantile(de.score_samples(X[1000:]), 0.75))
-    print(np.quantile(de.score_samples(X[1000:]), 0.95))
-    print(np.median(de.score_samples(X[1000:])))'''
-    de = None
+    if args.only_train :
+        print("Only training the classifiers. Exiting.")
+        exit(0)
 
     # Compute max and mins per feature
     xl = np.min(X)
@@ -147,12 +133,13 @@ if __name__ == "__main__":
 
     unique_labels = np.unique(y)
 
-    n_cluster = 5
+    n_cluster = args.n_clusters
 
 
-    # Dataframe for the exec time
-    df_index = pd.MultiIndex.from_product([unique_labels, range(n_cluster)], names=['label', 'cluster'])
-    df_time = pd.DataFrame(columns=['label', 'cluster', 'exec_time'], index = df_index)
+    # Dataframe for the exec time (only if non linear, pyomo)
+    if not args.math_opt :
+        df_index = pd.MultiIndex.from_product([unique_labels, range(n_cluster)], names=['label', 'cluster'])
+        df_time = pd.Series(index = df_index, name='exec_time')
 
     for label in unique_labels:
         y_orig = label
@@ -160,8 +147,9 @@ if __name__ == "__main__":
         print("Y_orig =", y_orig, "y_prime =", y_prime)
 
         # Alternative: Find interesting groups to explain by applying clustering
-        sub_data = X[y == label]
+        sub_data = X_test[y_test == label]
 
+        '''
         # Remove also instances that are very close to the decision boundary
         if isinstance(f, torch.nn.Module):
             with torch.no_grad():
@@ -171,11 +159,11 @@ if __name__ == "__main__":
             probs = f.predict_proba(sub_data)[:, 1]
 
         # Save the discarded instances for reference
-        conf = 0.8
+        conf_selection = 0.5
         if y_prime == 0:
             probs = 1 - probs
-        df_discarded = sub_data[probs >= 1 - conf]
-        sub_data = sub_data[probs < 1 - conf]
+        df_discarded = sub_data[probs >= 1 - conf_selection]
+        sub_data = sub_data[probs < 1 - conf_selection]'''
 
         # Use kmeans clustering (sklearn)
         cluster_alg = KMeans(n_clusters=args.n_clusters, random_state=args.random_seed)
@@ -185,100 +173,16 @@ if __name__ == "__main__":
         X_sub_list = []
         for c in np.unique(cluster_labels):
             X_c = sub_data[cluster_labels == c]
+            # If len X_c < 100, raise an Exception
+            '''if X_c.shape[0] < 50:
+                raise ValueError(f"Cluster {c} has less than 100 samples ({X_c.shape[0]} samples) using confidence"
+                                 f" {conf_selection}. Decrease confidence selection.")'''
+
             X_sub_list.append(torch.tensor(X_c, dtype=torch.float32))
 
-        # Do the same for the test data
-        # First, filter by label
-        sub_data_test = X_test[y_test == label]
-        # Remove also instances that are very close to the decision boundary
-        if isinstance(f, torch.nn.Module):
-            with torch.no_grad():
-                logits = f(torch.tensor(sub_data_test, dtype=torch.float32))
-                probs = torch.softmax(logits, dim=1)[:, 1].numpy()
-        else:
-            probs = f.predict_proba(sub_data_test)[:, 1]
-        if y_prime == 0:
-            probs = 1 - probs
-        sub_data_test = sub_data_test[probs < 1 - conf]
+        # Confidence for y_prime
+        y_prime_conf = 0.9
 
-        cluster_labels_test = cluster_alg.predict(sub_data_test)
-        X_sub_list_test = []
-        for c in np.unique(cluster_labels_test):
-            X_c = sub_data_test[cluster_labels_test == c]
-            X_sub_list_test.append(torch.tensor(X_c, dtype=torch.float32))
-
-
-
-        if args.verbose:
-            # Plot original data, color by class (blue and red)
-            fig = plt.figure()
-            ax = fig.gca()
-            sc = ax.scatter(X[:, fet1], X[:, fet2], c=['blue' if label == 0 else 'red' for label in y], alpha=0.5)
-            ax.set_title("Original data by class")
-            plt.show()
-
-
-            # Plot the subgroups with different colors (do not use red)
-            fig = plt.figure()
-            ax = fig.gca()
-            colors = ['blue', 'green', 'orange', 'purple', 'brown']
-            for i, X_sub in enumerate(X_sub_list):
-                ax.scatter(X_sub[:, fet1], X_sub[:, fet2], color=colors[i % len(colors)], label=f'Cluster {i}', alpha=0.5)
-            # Plot the discarded instances in gray
-            if len(df_discarded) > 0:
-                ax.scatter(df_discarded[:, fet1], df_discarded[:, fet2], color='gray', label='Discarded', alpha=0.5)
-            ax.set_title("Subgroups by clustering")
-            ax.legend()
-            plt.show()
-
-
-            # Visualize also the test clusters
-            # Plot the subgroups with different colors (do not use red)
-            fig = plt.figure()
-            ax = fig.gca()
-            colors = ['blue', 'green', 'orange', 'purple', 'brown']
-            for i, X_sub in enumerate(X_sub_list_test):
-                ax.scatter(X_sub[:, fet1], X_sub[:, fet2], color=colors[i % len(colors)], label=f'Cluster {i}',
-                           alpha=0.5)
-            ax.set_title("Subgroups by clustering")
-            ax.legend()
-            plt.show()
-
-
-        # ============================
-        # Step 4: Choose  solver
-        # ============================
-        # Pick which solver to use:
-        solver_name = "pymoo"   # or "sgd"
-
-        if solver_name == "sgd":
-            solver = SGDSolver(
-                lr=1e-2,
-                epochs=1000,
-                alpha=1.0,
-                beta=100.0,
-                gamma=1e-3
-            )
-
-        elif solver_name == "pymoo":
-            # Example with NSGA2
-            mut = PolynomialMutation()
-            solver = PyMooSolver(
-                algorithm=NSGA2(pop_size=100, eliminate_duplicates=True, mutation=mut),
-                termination= DefaultMultiObjectiveTermination(),
-                verbose=args.verbose,
-                min_acc=0.9
-            )
-        elif solver_name == "pymoolm":
-            solver = PyMooLMSolver(
-                algorithm=NSGA2(pop_size=100, eliminate_duplicates=True),
-                termination= DefaultMultiObjectiveTermination(),
-                verbose=args.verbose,
-                min_acc=0.9,
-                K = 1.1
-            )
-        else :
-            raise ValueError("Unknown solver")
 
         # ============================
         # Step 5: Solve and analyse
@@ -286,17 +190,19 @@ if __name__ == "__main__":
         for i, X_sub in enumerate(X_sub_list):
             transform = None
             if args.transform == 'FullAffine':
-                transform = FullAffine(d)
+                transform = FullAffine(d, blp_proxy= False)
+            elif args.transform == 'FullAffine_proxy':
+                transform = FullAffine(d, blp_proxy= True)
+            elif args.transform == 'SymmetricPSDAffine':
+                transform = SymmetricPSDAffine(d, blp_proxy= False)
+            elif args.transform == 'SymmetricPSDAffine_proxy':
+                transform = SymmetricPSDAffine(d, blp_proxy= True)
             elif args.transform == 'DiagonalAffine':
                 transform = DiagonalAffine(d)
-            elif args.transform == 'LowRankAffine':
-                transform = LowRankAffine(d, r=max(int(d/4),1))
-            elif args.transform == 'SmallMLP':
-                transform = SmallMLP(d, hidden=16)
             elif args.transform == 'DirectOptimization':
-                transform = DirectOptimization(X_sub, xl, xu, box_clip=True)
-            elif args.transform == 'GaussianPolynomialTransform':
-                transform = GaussianPolynomialTransform(d)
+                transform = DirectOptimization(X_sub, xl, xu)
+            elif args.transform == 'GaussianCommutativeTransform':
+                transform = GaussianCommutativeTransform(d)
             elif args.transform == 'GaussianTransform':
                 transform = GaussianTransform(d)
             elif args.transform == 'GMMForwardTransform':
@@ -308,41 +214,51 @@ if __name__ == "__main__":
                 transform.fit_prior(X_sub)
             transform.to(device)
 
-            linear = True
-            if linear :
-                K = 1.1
-                y_prime_conf = 0.9
-                if args.transform == "DirectOptimization":
-                    t0 = time.time()
-                    pv = transform.pyomo_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=y_prime_conf, K = K, bilipschitz=True,solver = 'ipopt')
-                    tn = time.time()
+            if args.math_opt and args.transform not in ['FullAffine', 'SymmetricPSDAffine', 'DiagonalAffine',
+                                                      'CommutativeGaussianTransform', 'GaussianScaleTransform',
+                                                      'DirectOptimization']:
+                raise ValueError("Linear solver cannot be used with transform " + args.transform)
 
-                    with torch.no_grad :
-                        X_sub_transformed = transform(X_sub.to(device)).cpu().numpy()
-                    wass = np.mean(np.linalg.norm(X_sub_transformed - X_sub.numpy(), axis= -1, ord=2))
-                    time = tn - t0
-                else :
-                    wass, time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K, solver = cv.SCS)
-
+            if args.math_opt :
+                solver = cv.SCS if not args.transform in ["DirectOptimization","FullAffine"] else "gurobi"
+                K_list = [1.1, 1.5, 2.0, 2.5, 3.0]
+                wass_list = []
+                time_list = []
+                for K in K_list :
+                    wass, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
+                                                 solver=solver)
+                    wass_list.append(wass)
+                    time_list.append(exec_time)
+                # Create df and save to csv
+                df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'exec_time': time_list})
+                df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
             # Non linear using Pymoo
             else :
-                if args.transform == "DirectOptimization":
-                    t0 = time.time()
-                    df_results, time = solver.solve(transform, f, X_sub.to(device), y_prime, y_prime_confidence=0.9,
-                                      seed=args.random_seed)
-                    tn = time.time()
-                else :
-                    t0 = time.time()
-                    df_results, time = solver.solve(transform, f, X_sub.to(device), y_prime, y_prime_confidence=0.9,
-                                      seed=args.random_seed)
-                    tn = time.time()
-            # Save to csv
-            file_name = os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv')
-            #df_results.to_csv(file_name, index=False)
+                # Pick which solver to use:
+                solver_name = "pymoo"  # or "sgd"
 
-            # Store exec time
-            df_time.loc[(y_orig, i), 'exec_time'] = time
+                if solver_name == "sgd":
+                    raise NotImplementedError("SGD solver not implemented for this experiment")
+
+                elif solver_name == "pymoo":
+                    # Example with NSGA2
+                    solver = PyMooSolver(
+                        algorithm=NSGA2(pop_size=100, eliminate_duplicates=True),
+                        termination=DefaultMultiObjectiveTermination(),
+                        verbose=args.verbose,
+                        min_acc=y_prime_conf
+                    )
+                else:
+                    raise ValueError("Unknown solver")
+                df_results, exec_time = cross_experiment_pymoo(transform, X_sub, f, y_prime, y_prime_conf, solver, random_seed= args.random_seed
+                )
+                # Store exec time
+                index = (y_orig, i)
+                df_time.loc[index] = exec_time
 
 
-    # Save exec time dataframe
-    df_time.to_csv(os.path.join(transform_path, "exec_times.csv"), index=False)
+
+    # Save exec time dataframe (if math_opt is false)
+    if not args.math_opt :
+        df_time.to_csv(os.path.join(transform_path, "exec_times.csv"), index=True)
+    print("Total exec time:", time.time() - t0)

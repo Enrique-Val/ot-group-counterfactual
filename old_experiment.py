@@ -19,9 +19,10 @@ from group_cfx.solver.pymoo_lm_solver import PyMooLMSolver
 from group_cfx.solver.pymoo_solver import PyMooSolver
 from group_cfx.solver.sgd_solver import SGDSolver
 from group_cfx.transforms.functional_transforms import FullAffine, LowRankAffine, SmallMLP, DirectOptimization, \
-    DiagonalAffine
-from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform
-from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianPolynomialTransform
+    DiagonalAffine, SymmetricPSDAffine
+from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform, TStudentTransform
+from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianCommutativeTransform, \
+    GaussianScaleTransform
 from group_cfx.transforms.utils import bi_lipschitz_metric
 from utils import synthetic_2d, train_classifier, print_plot_solutions, get_openml_dataset, train_gbt, train_lg
 
@@ -46,11 +47,11 @@ if __name__ == "__main__":
     parser.add_argument('--n_clusters', type=int, default=5, help='Number of clusters for subgrouping')
     parser.add_argument('--transform', type=str, default='FullAffine', help='Type of transform to use',
                         choices=['FullAffine', 'LowRankAffine', 'SmallMLP', 'DirectOptimization',
-                                 'GaussianPolynomialTransform', 'GaussianTransform', 'GMMForwardTransform'])
+                                 'GaussianCommutativeTransform', 'GaussianTransform', 'GMMForwardTransform'])
     args = parser.parse_args()
 
-    args.data_id = 44091
-    args.transform = 'FullAffine'
+    args.data_id = -1
+    args.transform = 'LowRankAffine'
 
     # Create output directory if it does not exist
     dir_path = os.path.join(args.output_dir, str(args.n_clusters), f"data_{args.data_id}")
@@ -170,7 +171,7 @@ if __name__ == "__main__":
             probs = f.predict_proba(sub_data)[:, 1]
 
         # Save the discarded instances for reference
-        conf = 0.8
+        conf = 0.7
         if y_prime == 0:
             probs = 1 - probs
         df_discarded = sub_data[probs >= 1 - conf]
@@ -264,7 +265,7 @@ if __name__ == "__main__":
             mut = PolynomialMutation()
             solver = PyMooSolver(
                 algorithm=NSGA2(pop_size=100, eliminate_duplicates=True, mutation=mut),
-                termination= DefaultMultiObjectiveTermination(),
+                termination= DefaultMultiObjectiveTermination(n_max_gen=20),
                 verbose=args.verbose,
                 min_acc=0.9
             )
@@ -286,6 +287,8 @@ if __name__ == "__main__":
             transform = None
             if args.transform == 'FullAffine':
                 transform = FullAffine(d)
+            elif args.transform == 'SymmetricPSDAffine':
+                transform = SymmetricPSDAffine(d)
             elif args.transform == 'DiagonalAffine':
                 transform = DiagonalAffine(d)
             elif args.transform == 'LowRankAffine':
@@ -294,12 +297,16 @@ if __name__ == "__main__":
                 transform = SmallMLP(d, hidden=16)
             elif args.transform == 'DirectOptimization':
                 transform = DirectOptimization(X_sub, xl, xu, box_clip=True)
-            elif args.transform == 'GaussianPolynomialTransform':
-                transform = GaussianPolynomialTransform(d)
+            elif args.transform == 'GaussianCommutativeTransform':
+                transform = GaussianCommutativeTransform(d)
             elif args.transform == 'GaussianTransform':
                 transform = GaussianTransform(d)
+            elif args.transform == 'GaussianScaleTransform':
+                transform = GaussianScaleTransform(d)
             elif args.transform == 'GMMForwardTransform':
                 transform = GMMForwardTransform(d, n_components=3)
+            elif args.transform == 'TStudentTransform':
+                transform = TStudentTransform(d)
             else:
                 raise ValueError("Unknown transform")
 
@@ -309,10 +316,10 @@ if __name__ == "__main__":
 
             exact = True
             if exact :
-                K = 1.1
+                K = 2
                 t0 = time.time()
-                if args.transform == "DirectOptimization":
-                    pv = transform.pyomo_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=0.9, K = K, bilipschitz=True,solver = 'ipopt')
+                if args.transform == "DirectOptimization" or args.transform == "FullAffine" or args.transform == "LowRankAffine":
+                    pv = transform.pyomo_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=0.9, K = K, solver = 'gurobi')
                 else :
                     pv = transform.cvxpy_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=0.9, K = K, solver = cv.SCS)
                 tn = time.time()
@@ -356,7 +363,8 @@ if __name__ == "__main__":
 
 
             t0 = time.time()
-            X_prime, res_f, res_x = solver.solve(transform, f, de, X_sub, y_prime=y_prime, seed=args.random_seed)
+            X_prime, res_f, res_x = solver.solve(transform, f, X_sub, y_prime=y_prime, y_prime_confidence = 0.9,
+                                                 seed=args.random_seed)
             tn = time.time()
             print("Solver time:", tn - t0)
 

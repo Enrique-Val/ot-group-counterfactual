@@ -43,13 +43,125 @@ class BaseTransform(nn.Module):
             raise NotImplementedError("Pyomo solving not implemented for this transform.")
 
 class FullAffine(BaseTransform):
-    def __init__(self, d):
+    def __init__(self, d, blp_proxy = True):
         super().__init__()
-        self.A_lower_triang = nn.Parameter(torch.zeros(d*(d+1)//2))
+        self.A = nn.Parameter(torch.Tensor(d, d))
+        self.B = nn.Parameter(torch.zeros(d))
+        self.xl = [-1.5]*(d*d) + [-5.0]*d
+        self.xu = [1.5]*(d*d) + [5.0]*d
+        self.blp_proxy = blp_proxy
+
+    def forward(self, x):
+        return self.clip_to_box(x @ (self.A.T) + self.B)
+
+
+    def lipschitz_proxy(self, X_orig):
+        if self.blp_proxy :
+            # penalize deviation of A from identity
+            I = torch.eye(self.A.shape[0])
+            A_non_param = self.A.detach()
+            return ((A_non_param - I) ** 2).mean()
+        else :
+            # Min singular value (and 1/singular value) of A
+            sym_A = (self.A.T @ self.A)
+            with torch.no_grad():
+                s, _ = torch.linalg.eigh(sym_A)
+                s = torch.sqrt(torch.clamp(s,0.0))
+                lipschitz_upper = s.max().item()
+                lipschitz_lower = s.min().item()
+                lipschitz = np.min([1/lipschitz_upper, lipschitz_lower])
+            return 1-lipschitz
+
+    def pyomo_solving(self, x: np.ndarray, model, y_prime, y_prime_confidence, K=1.1, solver='ipopt'):
+        n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
+        # Pyomo model
+        m = pyo.ConcreteModel()
+
+        # Convert x to array if not already
+        x = np.array(x)
+
+        # Index sets
+        m.I = pyo.RangeSet(0, n - 1)
+        m.J = pyo.RangeSet(0, d - 1)
+        m.K = pyo.RangeSet(0, d - 1)
+
+        # Variables
+        m.A = pyo.Var(m.J, m.K, domain=pyo.Reals)
+        m.b = pyo.Var(m.J, domain=pyo.Reals)
+
+        # Objective: sum of squared distances
+        def obj_rule(m):
+            return sum(
+                sum((sum(m.A[j, k] * x[i, k] for k in range(d)) + m.b[j] - x[i, j]) ** 2 for j in range(d))
+                for i in range(n)
+            )
+
+        m.obj = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
+
+        # Classification constraints
+        def class_rule(m, i):
+            logit = sum(w_model[j] * (sum(m.A[j, k] * x[i, k] for k in range(d)) + m.b[j]) for j in range(d)) + b_model
+            if y_prime == 1:
+                return logit >= margin_logit
+            else:
+                return logit <= margin_logit
+
+        m.class_constr = pyo.Constraint(m.I, rule=class_rule)
+
+        # Bi-Lipschitz pairwise constraints (nonconvex)
+        def lip_lower(m, i, j):
+            if i >= j:
+                return pyo.Constraint.Skip
+            diffX = x[i] - x[j]
+            distX_sq = float(np.dot(diffX, diffX))
+            distZ_sq = sum(
+                (sum(m.A[r, k] * diffX[k] for k in range(d))) ** 2
+                for r in range(d)
+            )
+            return distZ_sq >= (1 / (K ** 2)) * distX_sq
+
+        def lip_upper(m, i, j):
+            if i >= j:
+                return pyo.Constraint.Skip
+            diffX = x[i] - x[j]
+            distX_sq = float(np.dot(diffX, diffX))
+            distZ_sq = sum(
+                (sum(m.A[r, k] * diffX[k] for k in range(d))) ** 2
+                for r in range(d)
+            )
+            return distZ_sq <= (K ** 2) * distX_sq
+
+        m.lip_low = pyo.Constraint(m.I, m.I, rule=lip_lower)
+        m.lip_up = pyo.Constraint(m.I, m.I, rule=lip_upper)
+        # Solve
+        solver_instance = pyo.SolverFactory(solver)
+        res = solver_instance.solve(m, tee=True)
+
+        if res.solver.termination_condition != pyo.TerminationCondition.optimal:
+            print("Warning: Pyomo did not converge to optimal solution")
+
+        # Extract values
+        A_val = np.array([[pyo.value(m.A[j, k]) for k in range(d)] for j in range(d)])
+        b_val = np.array([pyo.value(m.b[j]) for j in range(d)])
+
+        # Update parameters
+        with torch.no_grad():
+            self.A.copy_(torch.tensor(A_val, dtype=torch.float32))
+            self.B.copy_(torch.tensor(b_val, dtype=torch.float32))
+
+        return m
+
+
+class SymmetricPSDAffine(BaseTransform):
+    def __init__(self, d, blp_proxy = True):
+        super().__init__()
+        self.A_cholesky_flatten = nn.Parameter(torch.zeros(d*(d+1)//2))
         self.A = None
         self.B = nn.Parameter(torch.zeros(d))
-        self.xl = [-1.0]*(d*(d+1)//2) + [-5.0]*d
-        self.xu = [1.0]*(d*(d+1)//2) + [5.0]*d
+        self.xl = [-1.5]*(d*(d+1)//2) + [-5.0]*d
+        self.xu = [1.5]*(d*(d+1)//2) + [5.0]*d
+        self.blp_proxy = blp_proxy
+
     def forward(self, x):
         return self.clip_to_box(x @ (self.A.T) + self.B)
 
@@ -60,25 +172,27 @@ class FullAffine(BaseTransform):
         self.A = torch.zeros(d, d, device=self.B.device)
         # Fill lower triangle directly
         idx = torch.tril_indices(d, d)
-        self.A[idx[0], idx[1]] = self.A_lower_triang
+        self.A[idx[0], idx[1]] = self.A_cholesky_flatten
         # Make symmetric
         self.A = self.A + self.A.T - torch.diag(torch.diag(self.A))
 
 
     def lipschitz_proxy(self, X_orig):
-        # penalize deviation of A from identity
-        I = torch.eye(self.A.shape[0])
-        A_non_param = self.A.detach()
-        return ((A_non_param - I) ** 2).mean()
-        # Min singular value (and 1/singular value) of A
-        sym_A = (self.A.T @ self.A)
-        with torch.no_grad():
-            s, _ = torch.linalg.eigh(sym_A)
-            s = torch.sqrt(torch.clamp(s,0.0))
-            lipschitz_upper = s.max().item()
-            lipschitz_lower = s.min().item()
-            lipschitz = np.min([1/lipschitz_upper, lipschitz_lower])
-        return 1-lipschitz
+        if self.blp_proxy :
+            # penalize deviation of A from identity
+            I = torch.eye(self.A.shape[0])
+            A_non_param = self.A.detach()
+            return ((A_non_param - I) ** 2).mean()
+        else :
+            # Min singular value (and 1/singular value) of A
+            sym_A = (self.A.T @ self.A)
+            with torch.no_grad():
+                s, _ = torch.linalg.eigh(sym_A)
+                s = torch.sqrt(torch.clamp(s,0.0))
+                lipschitz_upper = s.max().item()
+                lipschitz_lower = s.min().item()
+                lipschitz = np.min([1/lipschitz_upper, lipschitz_lower])
+            return 1-lipschitz
 
     def cvxpy_solving(self, x : np.ndarray, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
                       K =1.1, solver = cp.MOSEK) -> cp.Problem:
@@ -88,15 +202,17 @@ class FullAffine(BaseTransform):
         A = cp.Variable((d, d), symmetric=True)
         b = cp.Variable(d)
 
+        # Compute fX
+        fX = x @ A + b  # shape (n,d)
 
         # Objective: minimize the average distance between transformed points
-        # objective = cp.Minimize(cp.sum_squares(x @ A + b -x))
-        objective = cp.Minimize(cp.sum([cp.sum_squares(A @ x[i] + b - x[i]) for i in range(n)]))
+        objective = cp.Minimize(cp.sum_squares(fX -x))
+        #objective = cp.Minimize(cp.sum_squares(cp.hstack([A @ x[i] + b - x[i] for i in range(n)])) / n)
 
         # Constraints: transformed points must be classified as y_prime with confidence
         constraints = []
         # logistic linear constraints (elementwise)
-        logits = cp.hstack([w_model @ (A @ x[i] + b) + b_model for i in range(n)])
+        logits = fX @ w_model.T + b_model
         if y_prime == 1:
             constraints.append(logits >= margin_logit)
         else:
@@ -114,7 +230,7 @@ class FullAffine(BaseTransform):
         # Update parameters
         with torch.no_grad():
             self.A = torch.tensor(A.value, dtype=torch.float32)
-            self.A_lower_triang.copy_(self.A[torch.tril_indices(d, d)[0], torch.tril_indices(d, d)[1]])
+            self.A_cholesky_flatten.copy_(self.A[torch.tril_indices(d, d)[0], torch.tril_indices(d, d)[1]])
             self.B.copy_(torch.tensor(b.value, dtype=torch.float32))
         return prob
 
@@ -146,10 +262,12 @@ class DiagonalAffine(BaseTransform):
 
         # Apply affine transform: f(x) = diag(a) * x + b
         fX = cp.multiply(x, a) + b  # shape (n,d)
+        #diffs = [cp.sum_squares(cp.multiply(x[i], a) + b - x[i]) for i in range(n)]  # list of length n, each element shape (d,)
 
         # --- Empirical squared W2 objective --------------------------------------
         # Here we pair points in order (x_i -> y_i). For real W2, you'd solve an assignment problem,
         # but this keeps the formulation comparable to typical linear W2-approximation setups.
+        #objective = cp.Minimize(sum(diffs) / n)
         objective = cp.Minimize(cp.sum_squares(fX - x) / n)
 
         # --- Lipschitz constraint -------------------------------------------------
@@ -158,7 +276,10 @@ class DiagonalAffine(BaseTransform):
 
         # Constraints: transformed points must be classified as y_prime with confidence
         # logistic linear constraints (elementwise)
-        logits = cp.hstack([w_model @ (cp.multiply(x[i], a) + b) + b_model for i in range(n)])
+        #logits = cp.hstack([w_model @ (cp.multiply(x[i], a) + b) + b_model for i in range(n)])
+        #logits = cp.hstack([w_model @ (np.A @ x[i] + b) + b_model for i in range(n)])
+        #logits = (x @ cp.diag(a) + b) @ w_model + b_model
+        logits = fX @ w_model.T + b_model
         if y_prime == 1:
             constraints.append(logits >= margin_logit)
         else:
@@ -179,11 +300,12 @@ class DiagonalAffine(BaseTransform):
 class LowRankAffine(BaseTransform):
     def __init__(self, d, r=2):
         super().__init__()
+        self.r = r
         self.U = nn.Parameter(torch.zeros(d, r))
         self.V = nn.Parameter(torch.zeros(d, r))
         self.B = nn.Parameter(torch.zeros(d))
-        self.xl = -5.0
-        self.xu = 5.0
+        self.xl = [-1.5]*(d*r) + [-1.5]*(d*r) + [-5.0]*d
+        self.xu = [1.5]*(d*r) + [1.5]*(d*r) + [5.0]*d
     def forward(self, x):
         A = torch.eye(x.shape[1]) + self.U @ self.V.T
         return self.clip_to_box(x @ A.T + self.B)
@@ -193,6 +315,90 @@ class LowRankAffine(BaseTransform):
         I = torch.eye(self.U.shape[0])
         A_non_param = (self.U @ self.V.T).detach() + I
         return ((A_non_param - I) ** 2).mean()
+
+
+    def pyomo_solving(self, x: np.ndarray, model, y_prime, y_prime_confidence, K=1.1, solver='ipopt'):
+        n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
+        # Pyomo model
+        m = pyo.ConcreteModel()
+
+        # Convert x to array if not already
+        x = np.array(x)
+
+        # Index sets
+        m.I = pyo.RangeSet(0, n - 1)
+        m.J = pyo.RangeSet(0, d - 1)
+        m.R = pyo.RangeSet(0, self.r - 1)
+        m.K = pyo.RangeSet(0, d - 1)
+
+        # Variables
+        m.U = pyo.Var(m.J, m.R, domain=pyo.Reals)
+        m.V = pyo.Var(m.R, m.K, domain=pyo.Reals)
+        m.b = pyo.Var(m.J, domain=pyo.Reals)
+
+        # Helper function: A(x_vec) = U @ V @ x_vec + b
+        def A(m, x_vec, j):
+            """Returns j-th component of A(x_vec) = U V x_vec + b"""
+            return sum(m.U[j, s] * sum(m.V[s, k] * x_vec[k] for k in range(d)) for s in range(self.r)) + m.b[j]
+
+        # Objective: sum of squared distances
+        def obj_rule(m):
+            return sum(
+                sum((A(m, x[i], j) - x[i, j]) ** 2 for j in range(d))
+                for i in range(n)
+            )
+
+        m.obj = pyo.Objective(rule=obj_rule, sense=pyo.minimize)
+
+        # Classification constraints
+        def class_rule(m, i):
+            logit = sum(w_model[j] * A(m, x[i], j) for j in range(d)) + b_model
+            if y_prime == 1:
+                return logit >= margin_logit
+            else:
+                return logit <= margin_logit
+
+        m.class_constr = pyo.Constraint(m.I, rule=class_rule)
+
+        # Bi-Lipschitz pairwise constraints (nonconvex)
+        def lip_lower(m, i, j):
+            if i >= j:
+                return pyo.Constraint.Skip
+            diffX = x[i] - x[j]
+            distX_sq = float(np.dot(diffX, diffX))
+            distZ_sq = sum(A(m, diffX, r_idx) ** 2 for r_idx in range(d))
+            return distZ_sq >= (1 / (K ** 2)) * distX_sq
+
+        def lip_upper(m, i, j):
+            if i >= j:
+                return pyo.Constraint.Skip
+            diffX = x[i] - x[j]
+            distX_sq = float(np.dot(diffX, diffX))
+            distZ_sq = sum(A(m, diffX, r_idx) ** 2 for r_idx in range(d))
+            return distZ_sq <= (K ** 2) * distX_sq
+
+        m.lip_low = pyo.Constraint(m.I, m.I, rule=lip_lower)
+        m.lip_up = pyo.Constraint(m.I, m.I, rule=lip_upper)
+        # Solve
+        solver_instance = pyo.SolverFactory(solver)
+        solver_instance.set_instance(m)
+        res = solver_instance.solve(m, tee=True, options = {'NonConvex': 2})
+
+        if res.solver.termination_condition != pyo.TerminationCondition.optimal:
+            print("Warning: Pyomo did not converge to optimal solution")
+
+        # Extract values
+        U_val = np.array([[pyo.value(m.U[j, s]) for s in range(self.r)] for j in range(d)])
+        V_val = np.array([[pyo.value(m.V[s, k]) for k in range(d)] for s in range(self.r)])
+        b_val = np.array([pyo.value(m.b[j]) for j in range(d)])
+
+        # Update parameters
+        with torch.no_grad():
+            self.U.copy_(torch.tensor(U_val, dtype=torch.float32))
+            self.V.copy_(torch.tensor(V_val, dtype=torch.float32))
+            self.B.copy_(torch.tensor(b_val, dtype=torch.float32))
+        return m
+
 
 class SmallMLP(BaseTransform):
     def __init__(self, d, hidden=16):
@@ -235,49 +441,12 @@ class DirectOptimization(BaseTransform):
         else:
             return self.X_prime
 
-    def cvxpy_solving(self, x: np.ndarray, model: sklearn.linear_model.LogisticRegression,
-                      y_prime, y_prime_confidence, K = 1.1, bilipschitz = False) -> cp.Problem:
-        n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
-
-        if bilipschitz :
-            raise ValueError("CVXPY bilipschitz cannot implemented (non-convex). Solve using metaheuristics"
-                             "or use Pyomo with non-convex solver (e.g. Ipopt).")
-
-        # Decision variables: transformed points directly
-        X_prime = cp.Variable((n, d))
-
-        # Objective: keep transformed points close to originals
-        objective = cp.Minimize(cp.sum([cp.sum_squares(X_prime[i, :] - x[i, :]) for i in range(n)]))
-
-        # Constraints: classification as y_prime with confidence
-        logits = cp.hstack([w_model @ X_prime[i, :] + b_model for i in range(n)])
-        constraints = []
-        if y_prime == 1:
-            constraints.append(logits >= margin_logit)
-        else:
-            constraints.append(logits <= margin_logit)
-
-        # Lipschitz-like constraints
-        for i in range(n):
-            for j in range(i + 1, n):
-                v = x[i] - x[j]
-                # enforce pairwise distance contraction/expansion bound
-                constraints.append(cp.norm(X_prime[i, :] - X_prime[j, :], 2) <= K**2 * np.linalg.norm(v, 2))
-
-        # Solve
-        prob = cp.Problem(objective, constraints)
-        prob.solve(solver=cp.SCS)
-        if prob.status != cp.OPTIMAL:
-            print("Warning: QP did not converge")
-
-        # Update stored transformed points
-        with torch.no_grad():
-            self.X_prime.copy_(torch.tensor(X_prime.value, dtype=torch.float32))
-        return prob
-
     def pyomo_solving(self, x, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence, K =1.1,
-                      bilipschitz = False, solver = 'mosek') -> float:
+                      solver = 'mosek') -> float:
         n,d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
+
+        #assert np.all(np.isfinite(x))
+        assert np.isfinite(margin_logit)
 
         model = pyo.ConcreteModel()
 
@@ -304,20 +473,18 @@ class DirectOptimization(BaseTransform):
 
         model.cls_con = pyo.Constraint(model.N, rule=cls_rule)
 
-        if bilipschitz :
-            print("K", K**2)
-            # Pairwise bi-Lipschitz (non-convex)
-            def pairwise_rule_lower(m, i, j):
-                if i >= j:
-                    return pyo.Constraint.Skip
-                # Euclidean distance squared
-                dist_Z = sum((m.Z[i, k] - m.Z[j, k]) ** 2 for k in range(d))
-                dist_X = np.linalg.norm(x[i] - x[j]) ** 2
-                # enforce lower bound: dist_Z >= (1/K^2) * dist_X
-                # Since the distance is squared, we use K^2 here
-                return dist_Z >= (1.0 / K ** 2) * dist_X # and dist_Z <= (K ** 2) * dist_X
+        # Pairwise bi-Lipschitz (non-convex)
+        def pairwise_rule_lower(m, i, j):
+            if i >= j:
+                return pyo.Constraint.Skip
+            # Euclidean distance squared
+            dist_Z = sum((m.Z[i, k] - m.Z[j, k]) ** 2 for k in range(d))
+            dist_X = np.linalg.norm(x[i] - x[j]) ** 2
+            # enforce lower bound: dist_Z >= (1/K^2) * dist_X
+            # Since the distance is squared, we use K^2 here
+            return dist_Z >= (1.0 / K ** 2) * dist_X # and dist_Z <= (K ** 2) * dist_X
 
-            model.lip_con_low = pyo.Constraint(model.N, model.N, rule=pairwise_rule_lower)
+        model.lip_con_low = pyo.Constraint(model.N, model.N, rule=pairwise_rule_lower)
 
         def pairwise_rule_upper(m, i, j):
             if i >= j:

@@ -5,6 +5,7 @@ from pymoo.core.problem import ElementwiseProblem
 
 from group_cfx.solver.abstract_solver import Solver
 from group_cfx.transforms.functional_transforms import BaseTransform
+from group_cfx.transforms.gaussian_transforms import BaseGaussianTransform
 from group_cfx.transforms.probabilistic_transforms import ProbabilisticTransform
 
 

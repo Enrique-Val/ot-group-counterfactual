@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import openml as oml
 from sklearn.ensemble import GradientBoostingClassifier
 
+from group_cfx.transforms.functional_transforms import DirectOptimization
 from group_cfx.transforms.utils import bi_lipschitz_metric
 
 
@@ -113,7 +114,7 @@ def train_gbt(X, y, random_state):
 
 def train_lg(X, y, scoring = "accuracy", random_state = 0, max_iter = 100):
     param_grid = {
-        'C': np.logspace(-3, 3, 2),
+        'C': np.logspace(-3, 3, 20),
         'penalty': ['l1', 'l2'],
         'solver': ['saga', 'liblinear'],
     }
@@ -231,18 +232,31 @@ def print_plot_solutions(res_f, res_x, transform, X_sub, X_sub_test = None, n_pi
     fig2.show()
 
 def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.Tensor, f, y_prime, y_prime_confidence, K, solver, device = "cpu"):
-    t0 = time.time()
-    pv = transform.cvxpy_solving(X_sub_train, f, y_prime=y_prime, y_prime_confidence=y_prime_confidence, K=K, solver=solver)
-    tn = time.time()
+    try :
+        t0 = time.time()
+        pv = transform.cvxpy_solving(X_sub_train, f, y_prime=y_prime, y_prime_confidence=y_prime_confidence, K=K, solver=solver)
+        tn = time.time()
+    except NotImplementedError:
+        t0 = time.time()
+        pv = transform.pyomo_solving(X_sub_train, f , y_prime=y_prime, y_prime_confidence=y_prime_confidence, K=K, solver=solver)
+        tn = time.time()
+    except Exception as e:
+        raise e
 
-    # Plot transformed points
-    with torch.no_grad():
-        X_transformed = transform(X_sub_test.to(device)).cpu().numpy()
-    # Print Wasserstein distance of transformed points
-    wass = np.mean(np.linalg.norm(X_transformed - X_sub_test.numpy(), axis=-1, ord=2))
+    if X_sub_test is not None:
+        with torch.no_grad():
+            X_transformed = transform(X_sub_test.to(device)).cpu().numpy()
+        wass = np.mean(np.linalg.norm(X_transformed - X_sub_test.numpy(), axis=-1, ord=2))
+    else:
+        with torch.no_grad():
+            X_transformed = transform(X_sub_train.to(device)).cpu().numpy()
+        wass = np.mean(np.linalg.norm(X_transformed - X_sub_train.numpy(), axis=-1, ord=2))
     return wass, tn - t0
 
 def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confidence, K, solver, device = "cpu"):
+    if isinstance(transform, DirectOptimization):
+        return direct_experiment(transform, X_sub, None, f, y_prime, y_prime_confidence, K, solver, device)
+    # else :
     # Divide X_sub in 10, use 9 for fitting the transform, 1 for testing iteratively
     n = X_sub.shape[0]
     fold_size = n // 10
@@ -286,25 +300,30 @@ def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : 
         res_f = np.hstack([res_f, lip_real.reshape(-1, 1)])
 
         # If the transform is NOT DirectOptimization, forward the test sample and obtain Wasserstein and Lipschitz
-        res_f_test = np.zeros((len(res_x), 2))
-        for j in range(len(res_x)):
-            transform.load_parameters(res_x[j])
-            with torch.no_grad():
-                X_sub_test_prime = transform(X_sub_test.to(device))
-            # Wasserstein
-            diff = (X_sub_test_prime - X_sub_test).cpu().numpy()
-            wasserstein = np.mean(np.linalg.norm(diff, axis=-1, ord=2))
-            res_f_test[j, 0] = wasserstein
-            # Empirical test Lipschitz
-            lip = bi_lipschitz_metric(X_sub_test, X_sub_test_prime)
-            res_f_test[j, 1] = lip
-        print("Test set results (Wasserstein, Lipschitz proxy, Lipschitz):")
-        print(res_f_test)
+        if isinstance(transform, DirectOptimization):
+            # Then just append NAs for test set results
+            res_f_test = np.full((len(res_x), 2), np.nan)
+            df_results = pd.DataFrame(np.hstack([res_f, res_f_test]),
+                                      columns=['Wasserstein', 'Lipschitz proxy', 'Lipschitz', 'Wasserstein test',
+                                               'Lipschitz test'])
+        else:
+            res_f_test = np.zeros((len(res_x), 2))
+            for j in range(len(res_x)):
+                transform.load_parameters(res_x[j])
+                with torch.no_grad():
+                    X_sub_test_prime = transform(X_sub_test.to(device))
+                # Wasserstein
+                diff = (X_sub_test_prime - X_sub_test).cpu().numpy()
+                wasserstein = np.mean(np.linalg.norm(diff, axis=-1, ord=2))
+                res_f_test[j, 0] = wasserstein
+                # Empirical test Lipschitz
+                lip = bi_lipschitz_metric(X_sub_test, X_sub_test_prime)
+                res_f_test[j, 1] = lip
 
-        # Store results in a dataframe
-        df_results = pd.DataFrame(np.hstack([res_f, res_f_test]),
-                                  columns=['Wasserstein', 'Lipschitz proxy', 'Lipschitz', 'Wasserstein test',
-                                           'Lipschitz test'])
+            # Store results in a dataframe
+            df_results = pd.DataFrame(np.hstack([res_f, res_f_test]),
+                                      columns=['Wasserstein', 'Lipschitz proxy', 'Lipschitz', 'Wasserstein test',
+                                               'Lipschitz test'])
 
     # No covergence, empty dataset
     else:
@@ -314,6 +333,8 @@ def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : 
     return df_results, tn - t0
 
 def cross_experiment_pymoo(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confidence, solver, device = "cpu", random_seed = 0):
+    if isinstance(transform, DirectOptimization):
+        return direct_experiment_pymoo(transform, X_sub, None, f, y_prime, y_prime_confidence, solver, device, random_seed)
     # Divide X_sub in 10, use 9 for fitting the transform, 1 for testing iteratively
     n = X_sub.shape[0]
     fold_size = n // 10

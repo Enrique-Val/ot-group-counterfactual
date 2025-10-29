@@ -45,6 +45,9 @@ def load_results(root_dir, datasets, transforms, label_cluster) :
 
 if __name__ == "__main__":
     datasets, transforms, label_cluster = list_params(root_dir)
+    print(datasets)
+    print(transforms)
+    print(label_cluster)
     results = load_results(root_dir, datasets, transforms, label_cluster)
 
     # Iterate (within dataset -1) over all transforms and print the results for label_cluster 0,0

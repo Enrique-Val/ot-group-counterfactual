@@ -1,0 +1,5 @@
+*.xml
+*.iml
+*.pyc
+/group_cfx/models
+*.pdf

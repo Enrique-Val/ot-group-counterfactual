@@ -1,7 +1,7 @@
 import numpy as np
 import sklearn
 import torch
-from scipy.linalg import sqrtm
+from scipy.linalg import sqrtm, inv
 
 
 def wasserstein_distance_normals(m0, C0, m1, C1) :
@@ -91,12 +91,15 @@ def compute_A(sigma1: np.ndarray, sigma2: np.ndarray, tol: float = 1e-12) -> np.
     mask = sqrt_w1 > tol
     inv_sqrt_w1[mask] = 1.0 / sqrt_w1[mask]
 
-    Sigma1_sqrt = (V1 * sqrt_w1) @ V1.T
-    Sigma1_inv_sqrt = (V1 * inv_sqrt_w1) @ V1.T
+
+    Sigma1_sqrt = sqrtm(sigma1)
+    Sigma1_inv_sqrt = inv(sqrtm(sigma1))
+
+    #raise ValueError("Stop here")
 
     # middle = Sigma1^{1/2} Sigma2 Sigma1^{1/2}
     middle = Sigma1_sqrt @ sigma2 @ Sigma1_sqrt
-    middle = (middle + middle.T) / 2
+    #middle = (middle + middle.T) / 2
 
     # eigen-decomposition of middle and its sqrt (clip small negative evs due to num error)
     w2, V2 = np.linalg.eigh(middle)
@@ -104,12 +107,14 @@ def compute_A(sigma1: np.ndarray, sigma2: np.ndarray, tol: float = 1e-12) -> np.
     sqrt_w2 = np.sqrt(w2_clipped)
     middle_sqrt = (V2 * sqrt_w2) @ V2.T
 
+
     # assemble A
     A = Sigma1_inv_sqrt @ middle_sqrt @ Sigma1_inv_sqrt
-    A = (A + A.T) / 2  # ensure symmetry
+    A = A.real
+    #A = (A + A.T) / 2  # ensure symmetry
     # Convert it to np.float32
     A = A.astype(np.float32)
-    return A
+    return A.real
 
 def compute_A_commuting(sigma1: np.ndarray, sigma2: np.ndarray, tol: float = 1e-12) -> np.ndarray:
     """
@@ -167,9 +172,26 @@ def init_solving(x: np.ndarray, model: sklearn.linear_model.LogisticRegression, 
 # Example
 if __name__ == "__main__":
     #np.random.seed(0)
-    n = 500
+    n = 2
     G = np.random.randn(n, n)
-    Sigma1 = G @ G.T + 1e-6 * np.eye(n)  # PD
+    Sigma1 = G @ G.T + 1e-6 * np.eye(n)
+
+    A = np.random.randn(n, n)
+    A = A @ A.T + 1e-6 * np.eye(n)                    # PSD
+
+    Sigma2 = A @ Sigma1 @ A.T
+
+    # Retrieve A from Sigma1, Sigma2
+    A_retrieved = compute_A(Sigma1, Sigma2)
+    print("Original A:")
+    print(A)
+
+    print("Retrieved A:")
+    print(A_retrieved)
+
+    raise ValueError("Stop here")
+
+    # PD
     H = np.random.randn(n, n)
     Sigma2 = Sigma1*2#H @ H.T                     # PSD
     t0 = time.time()

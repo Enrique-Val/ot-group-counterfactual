@@ -1,8 +1,11 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from scipy.special import digamma
+from scipy.stats._multivariate import multivariate_normal_gen
 from torch import nn
 from scipy.stats import multivariate_normal, multivariate_t
+from sklearn.mixture import GaussianMixture
 
 from group_cfx.transforms.functional_transforms import BaseTransform
 from group_cfx.transforms.utils import wasserstein_distance_normals, compute_A, build_covariance_matrix, \
@@ -22,7 +25,11 @@ class ProbabilisticTransform(BaseTransform):
         raise NotImplementedError()
 
     def lipschitz_proxy(self, X_orig = None) -> float:
-        raise NotImplementedError()
+        if X_orig is None:
+            raise NotImplementedError()
+        else:
+            # Called method of parent class
+            return super().lipschitz_proxy(X_orig)
 
 
 class GMMForwardTransform(ProbabilisticTransform) :
@@ -33,23 +40,24 @@ class GMMForwardTransform(ProbabilisticTransform) :
     def __init__(self, d, n_components=3):
         super().__init__()
         self.n_components = n_components
-        self.prior_gmm : list[multivariate_normal] = []  # Placeholder for prior distribution
-        self.posterior_gmm : list[multivariate_normal] = []
+        self.prior_gmm : list[multivariate_normal_gen] = []  # Placeholder for prior distribution
+        self.prior_gmm_skl : GaussianMixture = None   # Placeholder for sklearn GMM
+        self.posterior_gmm : list[multivariate_normal_gen] = []
         self.log_weights = []
         self.A = []
         self.B = []
-        self.means = nn.Parameter(torch.zeros(n_components, d))
+        self.means_offset = nn.Parameter(torch.zeros(n_components, d))
         self.marginal_stds = nn.Parameter(torch.ones(n_components, d)*0.1)
         self.corr_triang = nn.Parameter(torch.zeros(n_components, d * (d - 1) // 2)+0.1)
-        self.xl = [0.2]* (n_components * d) + [0.00001]*(n_components * d) + [-0.99999]*(n_components * (d*(d-1)//2))
-        self.xu = [1.0]* (n_components * d) + [1]*(n_components * d) + [0.99999]*(n_components * (d*(d-1)//2))
+        self.xl = [-5.0]* (n_components * d) + [0.00001]*(n_components * d) + [-0.99999]*(n_components * (d*(d-1)//2))
+        self.xu = [5.0]* (n_components * d) + [1]*(n_components * d) + [0.99999]*(n_components * (d*(d-1)//2))
 
     def fit_prior(self, X_orig):
         # Fit a GMM to the original data using sklearn
-        from sklearn.mixture import GaussianMixture
         X_np = X_orig.detach().cpu().numpy()
         gmm = GaussianMixture(n_components=self.n_components, covariance_type='full', random_state=0)
         gmm.fit(X_np)
+        self.prior_gmm_skl = gmm
         self.prior_gmm = []
         for i in range(self.n_components):
             mvn = multivariate_normal(mean=gmm.means_[i], cov=gmm.covariances_[i])
@@ -68,7 +76,7 @@ class GMMForwardTransform(ProbabilisticTransform) :
         self.posterior_gmm = []
         for i in range(self.n_components):
             cov_matrix = build_covariance_matrix(self.marginal_stds[i].detach().cpu().numpy(), self.corr_triang[i].detach().cpu().numpy())
-            mvn = multivariate_normal(mean=self.means[i].detach().cpu().numpy(), cov=cov_matrix)
+            mvn = multivariate_normal(mean=self.means_offset[i].detach().cpu().numpy() + self.prior_gmm[i].mean , cov=cov_matrix)
             self.posterior_gmm.append(mvn)
         # Print means and covariances
         '''for i in range(self.n_components):
@@ -106,7 +114,7 @@ class GMMForwardTransform(ProbabilisticTransform) :
         x_transformed_selected = np.array([x_transformed_all[j, :, component_choices[j]] for j in range(x_np.shape[0])])
         return self.clip_to_box(torch.tensor(x_transformed_selected, dtype=x.dtype, device=x.device))
 
-    def wasserstein_projection_distance(self, X_orig):
+    def wasserstein_projection_distance(self, X_orig = None):
         # Compute pairwise distances between all components
         W = np.zeros((self.n_components, ))
         for i in range(self.n_components):
@@ -125,6 +133,12 @@ class GMMForwardTransform(ProbabilisticTransform) :
         weighted_wasserstein = np.sum(W * weights_prior)
         return weighted_wasserstein
 
+    def lipschitz_proxy(self, X_orig = None) -> float:
+        if X_orig is None:
+            # Compute the bi-Lipschitz metric by sampling from the joint distribution
+            X_orig = self.sample(1000).numpy()
+        return super().lipschitz_proxy(X_orig)
+
 
 
 '''
@@ -141,6 +155,7 @@ def ensure_positive_definite(matrix, epsilon=1e-6, method = 'diagonal_shift'):
     """Ensure the matrix is positive definite by adding a small value to its diagonal."""
     if method == 'diagonal_shift':
         # Add epsilon to the diagonal elements
+        matrix = (matrix + matrix.T) / 2  # Ensure symmetry
         adjusted_matrix = matrix + epsilon * np.eye(matrix.shape[0])
         return adjusted_matrix
     elif method == 'eigenvalue_clipping':
@@ -159,6 +174,7 @@ def fit_multivariate_t(X, nu_init=10.0, tol=1e-6, max_iter=100):
     Returns mean, scale matrix, and degrees of freedom.
     """
 
+    X = np.asarray(X)
     n, d = X.shape
     mu = np.mean(X, axis=0)
     Sigma = np.cov(X, rowvar=False)
@@ -189,7 +205,7 @@ def fit_multivariate_t(X, nu_init=10.0, tol=1e-6, max_iter=100):
             nu_new = nu - f(nu) / fprime(nu)
             if abs(nu_new - nu) < 1e-6:
                 break
-            nu = max(nu_new, 1e-3)
+            nu = min(max(nu_new, 1e-3), 50)  # Keep nu in a reasonable range
 
         # Check convergence
         if (
@@ -224,30 +240,51 @@ class TStudentTransform(ProbabilisticTransform) :
         self.prior_t : multivariate_t = None  # Placeholder for prior distribution
         self.posterior_t : multivariate_t = None
         self.cross_covariance_matrix = None
-        self.mean = nn.Parameter(torch.zeros(d))
+        self.mean_offset = nn.Parameter(torch.zeros(d))
         self.marginal_stds = nn.Parameter(torch.ones(d)*0.1)
-        self.corr_triang = nn.Parameter(torch.zeros(d * (d - 1) // 2)+0.1)
-        self.cross_corr_triang = nn.Parameter(torch.zeros(d * (d + 1) // 2)+0.1)
-        self.xl = [0.2]* d + [0.00001]*d + [-0.99999]*(d*(d-1)//2) + [-0.99999]*(d*(d+1)//2)
-        self.xu = [1.0]* d + [1]*d + [0.99999]*(d*(d-1)//2) + [0.99999]*(d*(d+1)//2)
+        self.corr_triang = nn.Parameter(torch.zeros(d * (d - 1) // 2)+0.01)
+        self.cross_corr = nn.Parameter(torch.zeros(d,d)+0.1)
+        self.xl = [-5.0]* d + [0.00001]*d + [-0.99999]*(d*(d-1)//2) + [-0.99999]*d**2
+        self.xu = [5.0]* d + [1]*d + [0.99999]*(d*(d-1)//2) + [0.99999]*d**2
 
 
     def build_joint(self):
         # Build the posterior multivariate t distribution and the cross-covariance matrix
         # We assume that prior_t is already set
         cov_matrix = build_covariance_matrix(self.marginal_stds.detach().cpu().numpy(), self.corr_triang.detach().cpu().numpy())
-        self.posterior_t = multivariate_t(loc=self.mean.detach().cpu().numpy(), shape=cov_matrix, df=self.prior_t.df)
-        d = self.mean.shape[0]
-        cross_cov_matrix = np.zeros((d, d))
-        tril_idx = np.tril_indices(d)
-        cross_cov_matrix[tril_idx] = self.cross_corr_triang.detach().cpu().numpy()
-        cross_cov_matrix[(tril_idx[1], tril_idx[0])] = self.cross_corr_triang.detach().cpu().numpy()  # symmetry
-        # scale by std
-        D_prior = np.diag(np.sqrt(np.diag(self.prior_t.cov)))
-        D_post = np.diag(self.marginal_stds.detach().cpu().numpy())
-        self.cross_covariance_matrix = D_post @ cross_cov_matrix @ D_prior
-        # For stability, symmetrize
-        self.cross_covariance_matrix = (self.cross_covariance_matrix + self.cross_covariance_matrix.T) / 2
+        self.posterior_t = multivariate_t(loc=self.mean_offset.detach().cpu().numpy() + self.prior_t.loc, shape=cov_matrix, df=self.prior_t.df)
+        d = self.mean_offset.shape[0]
+        # Cross-correlation matrix from lower-triangular parameter
+        cross_corr = np.tanh(self.cross_corr.detach().cpu().numpy())
+
+        # Cholesky factors of marginal covariances
+        Lx = np.linalg.cholesky(self.prior_t.shape)
+        Ly = np.linalg.cholesky(cov_matrix)
+
+        print(cross_corr)
+
+        # construct cross-covariance ensuring global PD
+        self.cross_covariance_matrix = Ly @ cross_corr @ Lx.T + 1e-6 * np.eye(d)
+
+        # Enforce spectral norm < 1
+        u, s, vh = np.linalg.svd(self.cross_covariance_matrix)
+        s_clipped = np.clip(s, 1e-6, 0.99)
+        self.cross_covariance_matrix = u @ np.diag(s_clipped) @ vh
+
+
+        # Check if cross-covariance is valid
+        eigvals = np.linalg.eigvalsh(self.cross_covariance_matrix)
+        if np.any(eigvals <= 0):
+            print(eigvals)
+            raise ValueError("Cross-covariance matrix is not positive definite.")
+
+        # Check that the joint covariance is positive definite
+        joint_cov = self.get_joint().shape
+        print("Joint covariance matrix:\n", joint_cov)
+        # If there is a negative eigenvalue, raise Error
+        eigvals = np.linalg.eigvalsh(joint_cov)
+        if np.any(eigvals <= 0):
+            raise ValueError("Joint covariance matrix is not positive definite.")
 
 
     def fit_prior(self, X_orig):
@@ -263,34 +300,44 @@ class TStudentTransform(ProbabilisticTransform) :
     def forward_probabilistic(self, x):
         # Probabilistic forward pass: sample from the conditional distribution
         x_np = x.detach().cpu().numpy()
-        d = self.mean.shape[0]
+        d = self.mean_offset.shape[0]
         n = x_np.shape[0]
         mean_cond = np.zeros((n, d))
         cov_cond = np.zeros((n, d, d))
-        dof_cond = np.zeros((n, d))
+        dof_cond = np.zeros(n)
+        inv_prior_shape = np.linalg.inv(self.prior_t.shape)
         for i in range(n):
-            diff = (x_np[i] - self.prior_t.mean).reshape(-1, 1)
-            mean_cond[i] = self.mean.detach().cpu().numpy() + self.cross_covariance_matrix @ np.linalg.inv(self.prior_t.cov) @ diff
-            cov_cond_ns = self.posterior_t.cov - self.cross_covariance_matrix @ np.linalg.inv(self.prior_t.cov) @ self.cross_covariance_matrix.T
-            dof_incr = diff.T @ np.linalg.inv(self.prior_t.cov) @ diff
-            cov_cond[i] = (self.prior_t.df + dof_incr) / (self.prior_t.df + d) * cov_cond_ns
+            diff = (x_np[i] - self.prior_t.loc).reshape(-1, 1)
+            mean_cond[i] = self.posterior_t.loc + (self.cross_covariance_matrix @ inv_prior_shape @ diff).reshape((1, -1))
+            cov_cond_ns = self.posterior_t.shape - self.cross_covariance_matrix @ inv_prior_shape @ self.cross_covariance_matrix.T
+            dof_incr = diff.T @ inv_prior_shape @ diff
+            scaling_factor = (self.prior_t.df + dof_incr) / (self.prior_t.df + d)
+            assert scaling_factor > 0, "Scaling factor must be positive"
+            cov_cond[i] = scaling_factor * cov_cond_ns
+            cov_cond[i] = 0.5 * (cov_cond[i] + cov_cond[i].T)
+            # Enforce positive definiteness
+            cov_cond[i] = ensure_positive_definite(cov_cond[i], method = 'diagonal_shift', epsilon=1e-2)
             dof_cond[i] = self.prior_t.df + d
         # Build n multivariate t distributions
         mv_t_list = []
         for i in range(n):
-            mv_t_list[i] = multivariate_t(loc=mean_cond[i], shape=cov_cond[i], df=dof_cond[i])
+            #print(cov_cond[i])
+            mv_t_list.append(multivariate_t(loc=mean_cond[i], shape=cov_cond[i], df=dof_cond[i]))
         return mv_t_list
 
     def get_joint(self) :
         # Build the joint distribution of (X, X')
-        d = self.mean.shape[0]
-        joint_mean = np.concatenate([self.prior_t.mean, self.mean.detach().cpu().numpy()])
+        d = self.mean_offset.shape[0]
+        joint_mean = np.concatenate([self.prior_t.loc, self.posterior_t.loc])
         joint_cov = np.zeros((2*d, 2*d))
-        joint_cov[:d, :d] = self.prior_t.cov
-        joint_cov[d:, d:] = self.posterior_t.cov
+        joint_cov[:d, :d] = self.prior_t.shape
+        joint_cov[d:, d:] = self.posterior_t.shape
         joint_cov[:d, d:] = self.cross_covariance_matrix
         joint_cov[d:, :d] = self.cross_covariance_matrix.T
-        joint_cov = ensure_positive_definite(joint_cov, method = 'eigenvalue_clipping')
+        # Print eigenvalues
+        eigvals = np.linalg.eigvalsh(joint_cov)
+        print(eigvals)
+        #joint_cov = ensure_positive_definite(joint_cov, method = 'eigenvalue_clipping')
         joint_t = multivariate_t(loc=joint_mean, shape=joint_cov, df=self.prior_t.df)
         return joint_t
 
@@ -310,8 +357,8 @@ class TStudentTransform(ProbabilisticTransform) :
             # Sample a large number of points from the joint distribution
             n_samples = 1000
             samples = self.sample(n_samples).numpy()
-            X = samples[:, :self.mean.shape[0]]
-            Y = samples[:, self.mean.shape[0]:]
+            X = samples[:, :self.mean_offset.shape[0]]
+            Y = samples[:, self.mean_offset.shape[0]:]
             diff = X - Y
             wasserstein = np.mean(np.linalg.norm(diff, axis=-1, ord=2))
             return wasserstein
@@ -325,8 +372,8 @@ class TStudentTransform(ProbabilisticTransform) :
         if X_orig is None:
             # Compute the bi-Lipschitz metric by sampling from the conditional distributions
             samples = self.sample()
-            X = samples[:, :self.mean.shape[0]]
-            Y = samples[:, self.mean.shape[0]:]
+            X = samples[:, :self.mean_offset.shape[0]]
+            Y = samples[:, self.mean_offset.shape[0]:]
             return bi_lipschitz_metric(X,Y)
         else :
             X_prime = self.forward(X_orig).detach().cpu().numpy()
