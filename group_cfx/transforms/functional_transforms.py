@@ -32,7 +32,7 @@ class BaseTransform(nn.Module):
         return bi_lipschitz_metric(X_orig, self.forward(X_orig))
 
     def wasserstein_projection_distance(self, X_orig) -> float :
-        return torch.mean(torch.norm(self.forward(X_orig) - X_orig, dim=1)).item()
+        return torch.mean(torch.norm(self.forward(X_orig) - X_orig, dim=1, p=2)).item()
 
     def cvxpy_solving(self, x : np.ndarray, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
                       K =1.1, solver = cp.MOSEK) -> float:
@@ -544,9 +544,9 @@ class DirectOptimization(BaseTransform):
 
         # Constraint the variable range as well
         def var_bounds_lower(m, i, j):
-            return m.Z[i,j] >= self.xl[j]
+            return m.Z[i,j] >= self.xl
         def var_bounds_upper(m, i, j):
-            return m.Z[i,j] <= self.xu[j]
+            return m.Z[i,j] <= self.xu
         model.var_bound_low = pyo.Constraint(model.N, model.D, rule=var_bounds_lower)
         model.var_bound_up = pyo.Constraint(model.N, model.D, rule=var_bounds_upper)
 
