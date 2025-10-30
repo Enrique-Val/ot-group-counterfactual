@@ -61,11 +61,11 @@ def build_covariance_matrix(marginal_stds, correlation_triangle) :
     C = np.eye(d)
     tril_idx = np.tril_indices(d, -1)
     C[tril_idx] = correlation_triangle
-    C[(tril_idx[1], tril_idx[0])] = correlation_triangle  # symmetry
+    C = C @C .T
 
     # scale by std
     D = np.diag(marginal_stds)
-    Sigma = D @ C @ D
+    Sigma = D @ C @ D + 1e-6 * np.eye(d)  # add small value for numerical stability
 
     # For stability, symmetrize
     Sigma = (Sigma + Sigma.T) / 2

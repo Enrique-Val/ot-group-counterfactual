@@ -1,37 +1,26 @@
-import argparse
+import os
 import time
-
+import argparse
 import numpy as np
 import pandas as pd
-import sklearn
-from pymoo.algorithms.moo.nsga2 import NSGA2
-from pymoo.termination import get_termination
-from pymoo.operators.mutation.pm import PolynomialMutation
-import torch
 import matplotlib.pyplot as plt
-import os
-
+import sklearn
+import torch
+from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.termination.default import DefaultMultiObjectiveTermination
-from scipy.stats import multivariate_normal
 from sklearn.cluster import KMeans
+import sklearn.utils
+import joblib
+import cvxpy as cv
 
-from group_cfx.solver.pymoo_lm_solver import PyMooLMSolver
 from group_cfx.solver.pymoo_solver import PyMooSolver
 from group_cfx.solver.sgd_solver import SGDSolver
-from group_cfx.transforms.functional_transforms import FullAffine, LowRankAffine, SmallMLP, DirectOptimization, \
-    DiagonalAffine, PSDAffine
-from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform, TStudentTransform
-from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianCommutativeTransform, \
+from group_cfx.transforms.functional_transforms import FullAffine, DiagonalAffine, PSDAffine, DirectOptimization
+from group_cfx.transforms.gaussian_transforms import GaussianCommutativeTransform, GaussianTransform, \
     GaussianScaleTransform
+from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform
 from group_cfx.transforms.utils import bi_lipschitz_metric
-from utils import synthetic_2d, train_classifier, print_plot_solutions, get_openml_dataset, train_gbt, train_lg
-
-from sklearn.model_selection import GridSearchCV
-from sklearn.linear_model import LogisticRegression
-
-import joblib
-
-import cvxpy as cv
+from utils import synthetic_2d, get_openml_dataset, train_lg, print_plot_solutions
 
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
@@ -51,7 +40,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     args.data_id = -1
-    args.transform = 'LowRankAffine'
+    args.transform = 'GMMForwardTransform'
 
     # Create output directory if it does not exist
     dir_path = os.path.join(args.output_dir, str(args.n_clusters), f"data_{args.data_id}")
@@ -112,13 +101,13 @@ if __name__ == "__main__":
         scoring = "f1_macro"
         f, params, score = train_lg(X, y, scoring=scoring, random_state=args.random_seed, max_iter = 1000)
 
-        # Pickle model to file
+        '''# Pickle model to file
         joblib.dump(f, os.path.join(dir_path, "lg.pkl"))
 
         # Save the training results (param and score) to a text file
         with open(os.path.join(dir_path, "lg_params.txt"), "w") as file :
             file.write(f"Best validation {scoring}: {score}\n")
-            file.write(f"Best parameters: {params}\n")
+            file.write(f"Best parameters: {params}\n")'''
 
 
 
@@ -262,10 +251,9 @@ if __name__ == "__main__":
 
         elif solver_name == "pymoo":
             # Example with NSGA2
-            mut = PolynomialMutation()
             solver = PyMooSolver(
-                algorithm=NSGA2(pop_size=100, eliminate_duplicates=True, mutation=mut),
-                termination= DefaultMultiObjectiveTermination(n_max_gen=20),
+                algorithm=NSGA2(pop_size=100, eliminate_duplicates=True),
+                termination= DefaultMultiObjectiveTermination(n_max_gen=2000),
                 verbose=args.verbose,
                 min_acc=0.9
             )
@@ -316,7 +304,7 @@ if __name__ == "__main__":
 
             exact = True
             if exact :
-                K = 2
+                K = 20
                 t0 = time.time()
                 if args.transform == "DirectOptimization" or args.transform == "FullAffine" or args.transform == "LowRankAffine":
                     pv = transform.pyomo_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=0.9, K = K, solver = 'gurobi')
@@ -324,6 +312,7 @@ if __name__ == "__main__":
                     pv = transform.cvxpy_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=0.9, K = K, solver = cv.SCS)
                 tn = time.time()
                 print("QP solving time:", tn - t0)
+
 
                 fig = plt.figure()
                 ax = fig.gca()

@@ -1,6 +1,7 @@
 import numpy as np
 import sklearn
 import torch
+from scipy.linalg import sqrtm
 from torch import nn
 from scipy.stats import multivariate_normal
 import cvxpy as cp
@@ -23,7 +24,6 @@ class BaseGaussianTransform(ProbabilisticTransform):
 
     def fit_prior(self, X_orig):
         cov = np.cov(X_orig.detach().cpu().numpy(), rowvar=False) + 1e-6 * np.eye(X_orig.shape[1])
-        print(np.linalg.eigvalsh(cov))
         self.prior_mvn = multivariate_normal(mean=X_orig.mean(axis=0).detach().cpu().numpy(), cov=np.cov(X_orig.detach().cpu().numpy(), rowvar=False))
         self.build_mvn()
         self.derive_affine_transform()
@@ -67,13 +67,33 @@ class GaussianTransform(BaseGaussianTransform):
     A simple Gaussian transform that adds Gaussian noise to the input.
     The mean and stddev of the noise are learnable parameters.
     """
-    def __init__(self, d):
+    def __init__(self, d, blp_proxy = False):
         super().__init__()
         self.posterior_mu_offset = nn.Parameter(torch.zeros(d))
         self.posterior_marginal_stds = nn.Parameter(torch.zeros(d)+0.00001)
         self.posterior_corr_triang = nn.Parameter(torch.zeros(d * (d - 1) // 2)+0.00001)
-        self.xl = [-5.0]*d + [0.001]*d + [-0.999]*(d*(d-1)//2)
+        self.xl = [-5.0]*d + [1e-6]*d + [-0.999]*(d*(d-1)//2)
         self.xu = [5.0]*d + [1.5]*d + [0.999]*(d*(d-1)//2)
+        self.blp_proxy = blp_proxy
+
+    def lipschitz_proxy(self, X_orig = None):
+        if self.blp_proxy == True :
+            # By default, use the difference of self.A from identity
+            I = torch.eye(self.A.shape[0])
+            A_non_param = self.A.detach()
+            #print(f"Lipschitz proxy: ||A - I||_F^2 = {((A_non_param - I) ** 2).mean().item()}")
+            return ((A_non_param - I) ** 2).mean()
+        else:
+            # Min singular value (and 1/singular value) of A
+            sym_A = (self.A.T @ self.A)
+            with torch.no_grad():
+                s, _ = torch.linalg.eigh(sym_A)
+                s = torch.sqrt(torch.clamp(s, 0.0))
+                lipschitz_upper = s.max().item()
+                lipschitz_lower = s.min().item()
+                lipschitz = np.min([1 / lipschitz_upper, lipschitz_lower])
+            return 1 - lipschitz
+
 
     def build_mvn(self):
         covariance_matrix_posterior = build_covariance_matrix(self.posterior_marginal_stds.detach().cpu().numpy(), self.posterior_corr_triang.detach().cpu().numpy())
@@ -95,7 +115,7 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         self.posterior_mu_offset = nn.Parameter(torch.zeros(d))
         # Scaling factor. A single parameter
         self.posterior_eigenvalues  = nn.Parameter(torch.ones(d)-0.5)
-        self.xl = [-5.0] * d + [0.00001]*d
+        self.xl = [-5.0] * d + [1e-6]*d
         self.xu = [5.0] * d + [1]*d
 
     def fit_prior(self, X_orig):
@@ -164,6 +184,12 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         # optional lower bound for bi-Lipschitz (uncomment if needed)
         constraints.append(s >= (1.0 / K) * sqrt_d0)
 
+        # Constraint the variable range as well
+        constraints.append(mu1_offset >= np.array(self.xl[:d]))
+        constraints.append(mu1_offset <= np.array(self.xu[:d]))
+        constraints.append(s >= np.array(self.xl[d:]))
+        constraints.append(s <= np.array(self.xu[d:]))
+
         # per-sample classification constraints.
         # Express z_i = A (x_i - mu0) + mu1, with A = sum_j (s_j / sqrt_d0_j) * (u_j u_j^T).
         X_centered = (x - mu0.reshape(1, -1))  # (n,d) numpy
@@ -197,7 +223,7 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         # update your internal pytorch variables
         with torch.no_grad():
             self.posterior_mu_offset.copy_(
-                torch.tensor(mu1_offset_val, dtype=self.posterior_mu.dtype, device=self.posterior_mu.device))
+                torch.tensor(mu1_offset_val, dtype=self.posterior_mu_offset.dtype, device=self.posterior_mu_offset.device))
             self.posterior_eigenvalues.copy_(
                 torch.tensor(d1_val, dtype=self.posterior_eigenvalues.dtype, device=self.posterior_eigenvalues.device))
             self.build_mvn()
@@ -206,14 +232,34 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         # return same structure as before
         return prob
 
+    def lipschitz_proxy(self, X_orig = None):
+        # Compute proportion between posterior and prior squared root eigenvalues (elementwise division)
+        proportions = np.sqrt(self.posterior_eigenvalues.detach().cpu().numpy()) / np.sqrt(self.prior_eigenvalues +1e-6)
+        inv_proportions = 1/proportions
+        # Elementwise min between proportion and inv_proportion
+        min_proportion = np.minimum(proportions, inv_proportions)
+        lip_proxy = 1.0 - np.min(min_proportion)
+        return lip_proxy
+
+    def wasserstein_projection_distance(self, X_orig = None):
+        m0 = self.prior_mvn.mean
+        m1 = self.posterior_mvn.mean
+
+        C0 = self.prior_mvn.cov
+        C1 = self.posterior_mvn.cov
+
+        return np.linalg.norm(m0 - m1) ** 2 + np.linalg.norm(sqrtm(C0) - sqrtm(C1), 'fro') ** 2
+
+
+
 
 class GaussianScaleTransform(BaseGaussianTransform) :
     def __init__(self, d):
         super().__init__()
         self.posterior_mu_offset = nn.Parameter(torch.zeros(d))
-        self.scaling = nn.Parameter(torch.ones(1))
-        self.xl = [-3.0] * d + [0.0001]
-        self.xu = [3.0] * d + [2.0]
+        self.scaling = nn.Parameter(torch.tensor(1.0))
+        self.xl = [-5.0] * d + [1e-6]
+        self.xu = [5.0] * d + [2.0]
 
     def build_mvn(self):
         covariance_matrix_posterior = self.prior_mvn.cov
@@ -221,21 +267,22 @@ class GaussianScaleTransform(BaseGaussianTransform) :
                                                  cov=self.scaling.item() * covariance_matrix_posterior)
 
     def derive_affine_transform(self):
-        self.B = torch.tensor((self.posterior_mvn.mean - self.prior_mvn.mean))
+        self.B = torch.tensor(self.posterior_mvn.mean - self.prior_mvn.mean*self.scaling.item())
+        self.A = np.eye(self.B.shape[0]) * self.scaling.item()
 
     def wasserstein_projection_distance(self, X_orig = None):
         m0 = self.prior_mvn.mean
         m1 = self.posterior_mvn.mean
 
         # Mean term
-        mean_diff = np.linalg.norm(m0 - m1) ** 2 + (self.scaling.item() - 1) ** 2 * np.trace(self.prior_mvn.cov)
+        mean_diff = np.linalg.norm(m0 - m1) ** 2 + ((np.sqrt(self.scaling.item()) - 1) ** 2) * np.trace(self.prior_mvn.cov)
         return mean_diff
 
     def forward(self, x):
-        return self.clip_to_box(x + self.B)
+        return self.clip_to_box(self.scaling.item() * x + self.B)
 
-    def lipschitz_proxy(self, X_orig):
-        return self.scaling.item() - 1.0
+    def lipschitz_proxy(self, X_orig = None):
+        return 1 - np.min([self.scaling.item(),1/self.scaling.item()])
 
     def is_cvx(self):
         return True
@@ -276,13 +323,17 @@ class GaussianScaleTransform(BaseGaussianTransform) :
         fX = t * x + b_ot  # shape (n,d)
 
         # Logistic classification constraints (linearized)
-        margin_logit = np.log(y_prime_confidence / (1 - y_prime_confidence))
-        for i in range(n) :
-            logits = w_model @ fX[i, :] + b_model
-            if y_prime == 1:
-                constraints.append(logits >= margin_logit)
-            else:
-                constraints.append(logits <= margin_logit)
+        logits = fX @ w_model.T + b_model  # shape (n,)
+        if y_prime == 1:
+            constraints.append(logits >= margin_logit)
+        else:
+            constraints.append(logits <= margin_logit)
+
+        # Constrain the variable range as well
+        constraints.append(b >= np.array(self.xl[:d]))
+        constraints.append(b <= np.array(self.xu[:d]))
+        constraints.append(t >= np.sqrt(self.xl[d]))
+        constraints.append(t <= np.sqrt(self.xu[d]))
 
         # --- Solve ----------------------------------------------------------------
         prob = cp.Problem(objective, constraints)

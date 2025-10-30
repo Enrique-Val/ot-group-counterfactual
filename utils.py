@@ -295,7 +295,7 @@ def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : 
         for j in range(len(res_x)):
             transform.load_parameters(res_x[j])
             with torch.no_grad():
-                lip = bi_lipschitz_metric(X_sub_test, transform(X_sub_test))
+                lip = bi_lipschitz_metric(X_sub_train, transform(X_sub_train))
             # Convert to 1-Lipschitz
             lip_real[j] = lip
         res_f = np.hstack([res_f, lip_real.reshape(-1, 1)])
@@ -333,17 +333,18 @@ def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : 
     # Save to csv
     return df_results, tn - t0
 
-def cross_experiment_pymoo(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confidence, solver, device = "cpu", random_seed = 0):
+def cross_experiment_pymoo(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confidence, solver, device = "cpu",
+                           random_seed = 0, k_folds = 10):
     if isinstance(transform, DirectOptimization):
         return direct_experiment_pymoo(transform, X_sub, None, f, y_prime, y_prime_confidence, solver, device, random_seed)
     # Divide X_sub in 10, use 9 for fitting the transform, 1 for testing iteratively
     n = X_sub.shape[0]
-    fold_size = n // 10
+    fold_size = n // k_folds
     df_list = []
     time_list = []
-    for i in range(10):
+    for i in range(k_folds):
         start = i * fold_size
-        end = (i + 1) * fold_size if i < 9 else n
+        end = (i + 1) * fold_size if i < (k_folds-1) else n
         X_sub_train = torch.cat([X_sub[:start], X_sub[end:]], dim=0)
         X_sub_test = X_sub[start:end]
 

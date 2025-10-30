@@ -137,9 +137,27 @@ class FullAffine(BaseTransform):
 
         m.lip_low = pyo.Constraint(m.I, m.I, rule=lip_lower)
         m.lip_up = pyo.Constraint(m.I, m.I, rule=lip_upper)
+
+        # Constraint the variable range as well
+        def var_bounds_A_lower(m, j, k):
+            return m.A[j,k] >= self.xl[0]
+        def var_bounds_A_upper(m, j, k):
+            return m.A[j,k] <= self.xu[0]
+        def var_bounds_b_lower(m, j):
+            return m.b[j] >= self.xl[-1]
+        def var_bounds_b_upper(m, j):
+            return m.b[j] <= self.xu[-1]
+
+        m.var_bound_A_low = pyo.Constraint(m.J, m.K, rule=var_bounds_A_lower)
+        m.var_bound_A_up = pyo.Constraint(m.J, m.K, rule=var_bounds_A_upper)
+        m.var_bound_b_low = pyo.Constraint(m.J, rule=var_bounds_b_lower)
+        m.var_bound_b_up = pyo.Constraint(m.J, rule=var_bounds_b_upper)
+
         # Solve
         solver_instance = pyo.SolverFactory(solver)
-        res = solver_instance.solve(m, tee=True)
+        if solver == "gurobi":
+            solver_instance.options['NonConvex'] = 2
+        res = solver_instance.solve(m)
 
         if res.solver.termination_condition != pyo.TerminationCondition.optimal:
             print("Warning: Pyomo did not converge to optimal solution")
@@ -229,9 +247,15 @@ class PSDAffine(BaseTransform):
         constraints.append(A >> (1 / K) * np.eye(d))
         constraints.append(A << K * np.eye(d))
 
+        # Constraint the variable range as well
+        constraints.append(A >= self.xl[0])
+        constraints.append(A <= self.xu[0])
+        constraints.append(b >= self.xl[-1])
+        constraints.append(b <= self.xu[-1])
+
         # Solve the QP
         prob = cp.Problem(objective, constraints)
-        prob.solve(solver=solver, verbose=True)
+        prob.solve(solver=solver)
         if prob.status != cp.OPTIMAL:
             print("Warning: QP did not converge to optimal solution")
         # Update parameters
@@ -294,6 +318,12 @@ class DiagonalAffine(BaseTransform):
             constraints.append(logits >= margin_logit)
         else:
             constraints.append(logits <= margin_logit)
+
+        # Constraint the variable range as well
+        constraints.append(a >= self.xl[0])
+        constraints.append(a <= self.xu[0])
+        constraints.append(b >= self.xl[-1])
+        constraints.append(b <= self.xu[-1])
 
         # Solve the QP
         prob = cp.Problem(objective, constraints)
@@ -389,6 +419,10 @@ class LowRankAffine(BaseTransform):
 
         m.lip_low = pyo.Constraint(m.I, m.I, rule=lip_lower)
         m.lip_up = pyo.Constraint(m.I, m.I, rule=lip_upper)
+
+        # Constraint the variable range as well
+        # TODO
+
         # Solve
         solver_instance = pyo.SolverFactory(solver)
         solver_instance.set_instance(m)
@@ -508,10 +542,19 @@ class DirectOptimization(BaseTransform):
 
         model.lip_con_up = pyo.Constraint(model.N, model.N, rule=pairwise_rule_upper)
 
+        # Constraint the variable range as well
+        def var_bounds_lower(m, i, j):
+            return m.Z[i,j] >= self.xl[j]
+        def var_bounds_upper(m, i, j):
+            return m.Z[i,j] <= self.xu[j]
+        model.var_bound_low = pyo.Constraint(model.N, model.D, rule=var_bounds_lower)
+        model.var_bound_up = pyo.Constraint(model.N, model.D, rule=var_bounds_upper)
 
-        # Solver (Ipopt)
-        solver = pyo.SolverFactory(solver)
-        result = solver.solve(model, tee=True)
+        # Solver
+        solver_instance = pyo.SolverFactory(solver)
+        if solver == "gurobi":
+            solver_instance.options['NonConvex'] = 2
+        result = solver_instance.solve(model)
 
         # Extract solution
         Z_opt = np.array([[pyo.value(model.Z[i, j]) for j in range(d)] for i in range(n)])

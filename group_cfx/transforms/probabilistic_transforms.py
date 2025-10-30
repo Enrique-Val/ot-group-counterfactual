@@ -136,8 +136,8 @@ class GMMForwardTransform(ProbabilisticTransform) :
     def lipschitz_proxy(self, X_orig = None) -> float:
         if X_orig is None:
             # Compute the bi-Lipschitz metric by sampling from the joint distribution
-            X_orig = self.sample(1000).numpy()
-        return super().lipschitz_proxy(X_orig)
+            X_orig = self.prior_gmm_skl.sample(1000)[0]
+        return super().lipschitz_proxy(torch.Tensor(X_orig))
 
 
 

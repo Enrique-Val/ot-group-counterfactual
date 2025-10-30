@@ -43,7 +43,7 @@ if __name__ == "__main__":
     parser.add_argument('--transform', type=str, default='FullAffine', help='Type of transform to use',
                         choices=['FullAffine', 'FullAffine_proxy', 'PSDAffine', 'PSDAffine_proxy', 'DiagonalAffine',
                                  'DirectOptimization',
-                                 'GaussianCommutativeTransform', 'GaussianTransform', 'GaussianScaleTransform',
+                                 'GaussianCommutativeTransform', 'GaussianTransform', 'GaussianTransform_proxy', 'GaussianScaleTransform',
                                  'GMMForwardTransform'])
     parser.add_argument('--math_opt', action='store_true', help='Use mathematical optimization')
     parser.add_argument('--only_train', action='store_true', help='Only train the classifier and density estimator')
@@ -207,6 +207,8 @@ if __name__ == "__main__":
                 transform = GaussianCommutativeTransform(d)
             elif args.transform == 'GaussianTransform':
                 transform = GaussianTransform(d)
+            elif args.transform == 'GaussianTransform_proxy':
+                transform = GaussianTransform(d, blp_proxy= True)
             elif args.transform == 'GaussianScaleTransform':
                 transform = GaussianScaleTransform(d)
             elif args.transform == 'GMMForwardTransform':
