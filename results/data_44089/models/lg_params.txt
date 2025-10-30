@@ -1,0 +1,2 @@
+Best validation f1_macro: 0.7464673555051141
+Best parameters: {'C': np.float64(1.438449888287663), 'penalty': 'l1', 'solver': 'liblinear'}

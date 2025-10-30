@@ -1,0 +1,2 @@
+Best validation f1_macro: 0.7440394147436795
+Best parameters: {'C': np.float64(0.07847599703514611), 'penalty': 'l2', 'solver': 'saga'}

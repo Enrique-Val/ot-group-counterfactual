@@ -1,0 +1,2 @@
+Best validation f1_macro: 0.7651719442592091
+Best parameters: {'C': np.float64(0.008858667904100823), 'l1_ratio': 0.7, 'penalty': 'elasticnet', 'solver': 'saga'}
