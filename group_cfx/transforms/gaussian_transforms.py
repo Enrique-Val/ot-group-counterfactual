@@ -190,25 +190,27 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         constraints.append(s >= np.array(self.xl[d:]))
         constraints.append(s <= np.array(self.xu[d:]))
 
-        # per-sample classification constraints.
-        # Express z_i = A (x_i - mu0) + mu1, with A = sum_j (s_j / sqrt_d0_j) * (u_j u_j^T).
-        X_centered = (x - mu0.reshape(1, -1))  # (n,d) numpy
-        for i in range(n):
-            v = X_centered[i]  # numpy vector
-            # compute A v as a linear combination of the fixed matrices UiUiT times coefficients c_j = (s_j / sqrt_d0_j)
-            # A v = sum_j (s_j / sqrt_d0_j) * (UiUiT[j] @ v)
-            # build affine expression for A v
-            Av_expr = sum(
-                (s[j] * inv_sqrt_d0[j]) * (UiUiT[j] @ v) for j in range(d))  # each term is cp expression (d,)
-            zi = Av_expr + mu1  # cp expression (d,)
-            logit_i = w_model @ zi + b_model  # scalar cp affine expression
-            if int(y_prime) == 1:
-                constraints.append(logit_i >= margin_logit)
-            else:
-                constraints.append(logit_i <= margin_logit)
+        # Construct full A as a CVXPY expression: A = sum_j (s_j / sqrt_d0_j) * (u_j u_j^T)
+        A_expr = sum((s[j] * inv_sqrt_d0[j]) * UiUiT[j] for j in range(d))  # shape (d,d) CVXPY expression
+
+        X_centered = x - mu0  # shape (n, d)
+
+        # Apply affine map to all samples at once: Z = X_centered @ A.T + mu1
+        Z_expr = X_centered @ A_expr.T + mu1  # shape (n,d) CVXPY expression
+
+        # Compute logits for all samples: shape (n,)
+        logits_expr = Z_expr @ w_model + b_model  # broadcasting b_model if needed
+
+        # Add constraints vectorized
+        if int(y_prime) == 1:
+            constraints.append(logits_expr >= margin_logit)
+        else:
+            constraints.append(logits_expr <= margin_logit)
 
         prob = cp.Problem(objective, constraints)
         prob.solve(solver=solver)
+        if prob.status != cp.OPTIMAL:
+            print("Warning: Problem did not converge to optimal solution")
 
         # extract results
         mu1_val = mu1.value

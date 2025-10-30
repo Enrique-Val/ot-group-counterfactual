@@ -169,8 +169,14 @@ if __name__ == "__main__":
         sub_data = sub_data[probs < 1 - conf_selection]'''
 
         # Use kmeans clustering (sklearn)
-        cluster_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
-        cluster_labels = cluster_alg.fit_predict(sub_data)
+        # If there are more than 20k instances, train only with the first 20k and predict the rest
+        if sub_data.shape[0] > 20000:
+            kmeans_alg = KMeans(n_clusters=args.n_clusters, random_state=args.random_seed)
+            kmeans_alg.fit(sub_data[:20000])
+            cluster_labels = kmeans_alg.predict(sub_data)
+        else:
+            cluster_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
+            cluster_labels = cluster_alg.fit_predict(sub_data)
 
         # Get "sub" datasets for each cluster
         X_sub_list = []
@@ -227,7 +233,7 @@ if __name__ == "__main__":
 
             if args.math_opt :
                 solver = cv.MOSEK if not args.transform in ["DirectOptimization","FullAffine"] else "gurobi"
-                K_list = [1.5, 5.0, 10.0, 15.0, 20.0]
+                K_list = [5.0, 10.0, 15.0, 20.0, 25.0]
                 wass_list = []
                 time_list = []
                 for K in K_list :

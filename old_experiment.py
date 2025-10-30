@@ -40,7 +40,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     args.data_id = -1
-    args.transform = 'GMMForwardTransform'
+    args.transform = 'GaussianCommutativeTransform'
 
     # Create output directory if it does not exist
     dir_path = os.path.join(args.output_dir, str(args.n_clusters), f"data_{args.data_id}")
