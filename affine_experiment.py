@@ -182,9 +182,11 @@ if __name__ == "__main__":
         X_sub_list = []
         for c in np.unique(cluster_labels):
             X_c = sub_data[cluster_labels == c]
+            # TODO remove, but limit to 500 instances for preliminary testing
+            X_c = X_c[:500]
             # If len X_c < 100, raise an Exception
             if X_c.shape[0] < 10:
-                raise ValueError(f"Cluster {c} has less than 100 samples ({X_c.shape[0]} samples)")
+                raise ValueError(f"Cluster {c} has less than 10 samples ({X_c.shape[0]} samples)")
 
             X_sub_list.append(torch.tensor(X_c, dtype=torch.float32))
 
@@ -264,6 +266,8 @@ if __name__ == "__main__":
                     raise ValueError("Unknown solver")
                 df_results, exec_time = cross_experiment_pymoo(transform, X_sub, f, y_prime, y_prime_conf, solver, random_seed= args.random_seed
                 )
+                # Save results to csv
+                df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
                 # Store exec time
                 index = (y_orig, i)
                 df_time.loc[index] = exec_time
