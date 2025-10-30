@@ -35,7 +35,7 @@ class BaseTransform(nn.Module):
         return torch.mean(torch.norm(self.forward(X_orig) - X_orig, dim=1)).item()
 
     def cvxpy_solving(self, x : np.ndarray, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
-                      K =1.1, solver = cp.SCS) -> float:
+                      K =1.1, solver = cp.MOSEK) -> float:
         raise NotImplementedError("CVXPY solving not implemented for this transform.")
 
     def pyomo_solving(self, x, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence, K =1.1,
@@ -156,7 +156,7 @@ class FullAffine(BaseTransform):
         return m
 
 
-class SymmetricPSDAffine(BaseTransform):
+class PSDAffine(BaseTransform):
     def __init__(self, d, blp_proxy = True):
         super().__init__()
         self.A_cholesky_flatten = nn.Parameter(torch.zeros(d*(d+1)//2))
@@ -206,7 +206,7 @@ class SymmetricPSDAffine(BaseTransform):
         n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
 
         # Decision variables
-        A = cp.Variable((d, d), symmetric=True, PSD=True)
+        A = cp.Variable((d, d), PSD=True)
         b = cp.Variable(d)
 
         # Compute fX

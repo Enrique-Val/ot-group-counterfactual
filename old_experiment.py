@@ -19,7 +19,7 @@ from group_cfx.solver.pymoo_lm_solver import PyMooLMSolver
 from group_cfx.solver.pymoo_solver import PyMooSolver
 from group_cfx.solver.sgd_solver import SGDSolver
 from group_cfx.transforms.functional_transforms import FullAffine, LowRankAffine, SmallMLP, DirectOptimization, \
-    DiagonalAffine, SymmetricPSDAffine
+    DiagonalAffine, PSDAffine
 from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform, TStudentTransform
 from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianCommutativeTransform, \
     GaussianScaleTransform
@@ -288,7 +288,7 @@ if __name__ == "__main__":
             if args.transform == 'FullAffine':
                 transform = FullAffine(d)
             elif args.transform == 'SymmetricPSDAffine':
-                transform = SymmetricPSDAffine(d)
+                transform = PSDAffine(d)
             elif args.transform == 'DiagonalAffine':
                 transform = DiagonalAffine(d)
             elif args.transform == 'LowRankAffine':

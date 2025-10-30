@@ -14,7 +14,7 @@ from sklearn.cluster import KMeans
 
 from group_cfx.solver.pymoo_solver import PyMooSolver
 from group_cfx.transforms.functional_transforms import FullAffine, DirectOptimization, \
-    DiagonalAffine, SymmetricPSDAffine
+    DiagonalAffine, PSDAffine
 from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform
 from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianCommutativeTransform, \
     GaussianScaleTransform
@@ -41,7 +41,7 @@ if __name__ == "__main__":
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed for reproducibility')
     parser.add_argument('--n_clusters', type=int, default=5, help='Number of clusters for subgrouping')
     parser.add_argument('--transform', type=str, default='FullAffine', help='Type of transform to use',
-                        choices=['FullAffine', 'FullAffine_proxy', 'SymmetricPSDAffine', 'SymmetricPSDAffine_proxy', 'DiagonalAffine',
+                        choices=['FullAffine', 'FullAffine_proxy', 'PSDAffine', 'PSDAffine_proxy', 'DiagonalAffine',
                                  'DirectOptimization',
                                  'GaussianCommutativeTransform', 'GaussianTransform', 'GaussianScaleTransform',
                                  'GMMForwardTransform'])
@@ -195,10 +195,10 @@ if __name__ == "__main__":
                 transform = FullAffine(d, blp_proxy= False)
             elif args.transform == 'FullAffine_proxy':
                 transform = FullAffine(d, blp_proxy= True)
-            elif args.transform == 'SymmetricPSDAffine':
-                transform = SymmetricPSDAffine(d, blp_proxy= False)
-            elif args.transform == 'SymmetricPSDAffine_proxy':
-                transform = SymmetricPSDAffine(d, blp_proxy= True)
+            elif args.transform == 'PSDAffine':
+                transform = PSDAffine(d, blp_proxy= False)
+            elif args.transform == 'PSDAffine_proxy':
+                transform = PSDAffine(d, blp_proxy= True)
             elif args.transform == 'DiagonalAffine':
                 transform = DiagonalAffine(d)
             elif args.transform == 'DirectOptimization':
@@ -218,14 +218,14 @@ if __name__ == "__main__":
                 transform.fit_prior(X_sub)
             transform.to(device)
 
-            if args.math_opt and args.transform not in ['FullAffine', 'SymmetricPSDAffine', 'DiagonalAffine',
+            if args.math_opt and args.transform not in ['FullAffine', 'PSDAffine', 'DiagonalAffine',
                                                       'GaussianCommutativeTransform', 'GaussianScaleTransform',
                                                       'DirectOptimization']:
                 raise ValueError("Linear solver cannot be used with transform " + args.transform)
 
             if args.math_opt :
                 solver = cv.MOSEK if not args.transform in ["DirectOptimization","FullAffine"] else "gurobi"
-                K_list = [2.0, 2.5, 3.0, 3.5, 4.0]
+                K_list = [1.5, 5.0, 10.0, 15.0, 20.0]
                 wass_list = []
                 time_list = []
                 for K in K_list :
