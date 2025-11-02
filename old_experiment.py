@@ -35,18 +35,22 @@ if __name__ == "__main__":
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed for reproducibility')
     parser.add_argument('--n_clusters', type=int, default=5, help='Number of clusters for subgrouping')
     parser.add_argument('--transform', type=str, default='FullAffine', help='Type of transform to use',
-                        choices=['FullAffine', 'LowRankAffine', 'SmallMLP', 'DirectOptimization',
+                        choices=['FullAffine', 'PSDAffine' 'LowRankAffine', 'SmallMLP', 'DirectOptimization',
                                  'GaussianCommutativeTransform', 'GaussianTransform', 'GMMForwardTransform'])
     args = parser.parse_args()
 
-    args.data_id = -1
-    args.transform = 'GaussianCommutativeTransform'
+    args.data_id = 44127
+    args.transform = 'GaussianTransform'
+    exact = True
 
     # Create output directory if it does not exist
-    dir_path = os.path.join(args.output_dir, str(args.n_clusters), f"data_{args.data_id}")
-    transform_path = os.path.join(dir_path, args.transform)
+    data_path = os.path.join(args.output_dir, f"data_{args.data_id}")
+    models_path = os.path.join(data_path, "models")
+    transform_path = os.path.join(data_path,str(args.n_clusters), "math_opt" if exact else "heuristic", args.transform)
     if not os.path.exists(transform_path):
         os.makedirs(transform_path)
+    if not os.path.exists(models_path):
+        os.makedirs(models_path)
 
 
     # ============================
@@ -91,23 +95,15 @@ if __name__ == "__main__":
     '''
 
     # Load model if it exists
-    if os.path.exists(os.path.join(dir_path, "lg.pkl")) :
-        f = joblib.load(os.path.join(dir_path, "lg.pkl"))
-        print("Loaded model from", os.path.join(dir_path, "lg.pkl"))
+    if os.path.exists(os.path.join(models_path, "lg.pkl")) :
+        f = joblib.load(os.path.join(models_path, "lg.pkl"))
+        print("Loaded model from", os.path.join(models_path, "lg.pkl"))
         print("Best validation accuracy:", f.score(X, y))
 
     else :
         # Train a logistic regression model
         scoring = "f1_macro"
         f, params, score = train_lg(X, y, scoring=scoring, random_state=args.random_seed, max_iter = 1000)
-
-        '''# Pickle model to file
-        joblib.dump(f, os.path.join(dir_path, "lg.pkl"))
-
-        # Save the training results (param and score) to a text file
-        with open(os.path.join(dir_path, "lg_params.txt"), "w") as file :
-            file.write(f"Best validation {scoring}: {score}\n")
-            file.write(f"Best parameters: {params}\n")'''
 
 
 
@@ -275,7 +271,7 @@ if __name__ == "__main__":
             transform = None
             if args.transform == 'FullAffine':
                 transform = FullAffine(d)
-            elif args.transform == 'SymmetricPSDAffine':
+            elif args.transform == 'PSDAffine':
                 transform = PSDAffine(d)
             elif args.transform == 'DiagonalAffine':
                 transform = DiagonalAffine(d)
@@ -302,12 +298,11 @@ if __name__ == "__main__":
                 transform.fit_prior(X_sub)
             transform.to(device)
 
-            exact = True
             if exact :
-                K = 20
+                K = 50
                 t0 = time.time()
                 if args.transform == "DirectOptimization" or args.transform == "FullAffine" or args.transform == "LowRankAffine":
-                    pv = transform.pyomo_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=0.9, K = K, solver = 'gurobi')
+                    pv = transform.pyomo_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=0.9, K = K, solver = 'ipopt')
                 else :
                     pv = transform.cvxpy_solving(X_sub, f, y_prime=y_prime, y_prime_confidence=0.9, K = K, solver = cv.SCS)
                 tn = time.time()
@@ -348,7 +343,7 @@ if __name__ == "__main__":
                 ax.legend()
                 plt.show()
 
-                #raise Exception("Stop")
+                raise Exception("Stop")
 
 
             t0 = time.time()

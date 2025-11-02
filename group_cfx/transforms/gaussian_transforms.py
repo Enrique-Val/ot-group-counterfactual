@@ -24,7 +24,7 @@ class BaseGaussianTransform(ProbabilisticTransform):
 
     def fit_prior(self, X_orig):
         cov = np.cov(X_orig.detach().cpu().numpy(), rowvar=False) + 1e-6 * np.eye(X_orig.shape[1])
-        self.prior_mvn = multivariate_normal(mean=X_orig.mean(axis=0).detach().cpu().numpy(), cov=np.cov(X_orig.detach().cpu().numpy(), rowvar=False))
+        self.prior_mvn = multivariate_normal(mean=X_orig.mean(axis=0).detach().cpu().numpy(), cov=cov)
         self.build_mvn()
         self.derive_affine_transform()
 
@@ -106,6 +106,106 @@ class GaussianTransform(BaseGaussianTransform):
             covariance_matrix_posterior += (-min_eig + 1e-6) * np.eye(covariance_matrix_posterior.shape[0])
         self.posterior_mvn = multivariate_normal(mean=self.prior_mvn.mean + self.posterior_mu_offset.detach().cpu().numpy(), cov=covariance_matrix_posterior)
 
+    def cvxpy_solving(self, x : np.ndarray, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
+                      K =1.1, solver = cp.MOSEK) -> float:
+        # Convert x to numpy if it's a torch tensor
+        if isinstance(x, torch.Tensor):
+            x = x.detach().cpu().numpy()
+
+        eps_reg = 1e-9
+        n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
+
+        mu0 = self.prior_mvn.mean.reshape(d, )
+        Sigma0 = self.prior_mvn.cov
+
+        Sigma0_inv = np.linalg.inv(Sigma0)
+        Sigma0_sqrt = sqrtm(Sigma0)
+
+        # decision variables for Q = (mu1, Sigma1) and coupling R
+        mu1 = cp.Variable(d)
+        #Sigma1 = cp.Variable((d, d), PSD=True)
+        A = cp.Variable((d, d), PSD = True)
+        R = Sigma0 @ A
+        Sigma1 = cp.Variable((d, d), PSD=True)
+
+        # convex PSD constraint for Gaussian coupling
+        constraints = [cp.bmat([[Sigma0, R],
+                                [R.T, Sigma1]]) >> 0]
+
+        # Schur LMI for Sigma1 = A.T @ Sigma0 @ A
+        schur = cp.bmat([[Sigma1, A.T @ Sigma0_sqrt],
+                         [Sigma0_sqrt @ A, np.eye(d)]])
+        # Since we have PD constraints on A and Sigma1, Schur LMI is implied
+        #constraints += [schur >> 0]
+
+        # Wasserstein-2 objective
+        bures_const = np.trace(Sigma0)
+        objective = cp.Minimize(cp.sum_squares(mu1 - mu0)
+                                + cp.trace(Sigma1)
+                                + bures_const
+                                - 2 * cp.trace(R))
+
+        '''# optional spectral (bi-Lipschitz-type) bounds on covariance ratio
+        eigvals_S0 = np.linalg.eigvalsh(Sigma0)
+        lam_max = np.max(eigvals_S0)
+        lam_min = np.min(eigvals_S0)
+        constraints += [Sigma1 << (K ** 2) * lam_max * np.eye(d),
+                        Sigma1 >> (1.0 / K ** 2) * lam_min * np.eye(d)]
+        '''
+        # affine transport map from P→Q: T(x)=mu1 + R.T @ Sigma0_inv @ (x - mu0)
+        X_centered = x - mu0
+        Z_expr = X_centered @ A + mu1
+
+        # classifier constraints
+        logits_expr = Z_expr @ w_model + b_model
+        if int(y_prime) == 1:
+            constraints.append(logits_expr >= margin_logit)
+        else:
+            constraints.append(logits_expr <= margin_logit)
+
+        # Bilipschitz constraints on covariance ratio
+        constraints.append(A >> (1 / K) * np.eye(d))
+        constraints.append(A << K * np.eye(d))
+
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver=solver)
+        if prob.status != cp.OPTIMAL:
+            print("Warning: Problem did not converge")
+
+        # extract solution
+        mu1_val = mu1.value
+        Sigma1_val = Sigma1.value
+        R_val = R.value
+        A_val = A.value
+        b_val = mu1_val - A_val @ mu0
+
+        # update your internal pytorch variables
+        with torch.no_grad():
+            self.posterior_mu_offset.copy_(
+                torch.tensor(mu1_val - self.prior_mvn.mean, dtype=self.posterior_mu_offset.dtype, device=self.posterior_mu_offset.device))
+            # Decompose Sigma1_val into std and correlations
+            stds = np.sqrt(np.diag(Sigma1_val))
+            self.posterior_marginal_stds.copy_(
+                torch.tensor(stds, dtype=self.posterior_marginal_stds.dtype, device=self.posterior_marginal_stds.device))
+            # Compute correlations
+            corr_matrix = Sigma1_val / (stds[:, None] @ stds[None, :])
+            # Extract lower triangular part
+            tril_indices = np.tril_indices(d, -1)
+            corr_tril = corr_matrix[tril_indices]
+            self.posterior_corr_triang.copy_(
+                torch.tensor(corr_tril, dtype=self.posterior_corr_triang.dtype, device=self.posterior_corr_triang.device))
+            self.build_mvn()
+            #self.derive_affine_transform()
+            #Manually set A and B
+            self.A = torch.tensor(A_val, dtype=self.A.dtype, device=self.A.device)
+            self.B = torch.tensor(b_val, dtype=self.B.dtype, device=self.B.device)
+
+            print("Sigma1", Sigma1_val)
+            print("Sigma0", Sigma0)
+            print("Sigma1 inferred", self.A.detach().cpu().numpy() @ Sigma0 @ self.A.detach().cpu().numpy().T)
+            print("A", A_val)
+        # return same structure as before
+        return prob
 
 class GaussianCommutativeTransform(BaseGaussianTransform) :
     def __init__(self, d):
