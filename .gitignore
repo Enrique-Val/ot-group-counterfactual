@@ -3,3 +3,4 @@
 *.pyc
 /group_cfx/models
 *.pdf
+*.csv

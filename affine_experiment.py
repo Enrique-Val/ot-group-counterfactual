@@ -185,9 +185,12 @@ if __name__ == "__main__":
             # TODO remove, but limit to 500 instances for preliminary testing
             X_c = X_c[:500]
             # If len X_c < 100, raise an Exception
-            if X_c.shape[0] < 10:
-                raise ValueError(f"Cluster {c} has less than 10 samples ({X_c.shape[0]} samples)")
-
+            if X_c.shape[0] < 20:
+                # Warn the user and introduce synthetic samples by jittering up to 20
+                print(f"Warning: Cluster {c} has less than 20 samples ({X_c.shape[0]} samples). Augmenting data by jittering.")
+                n_needed = 20 - X_c.shape[0]
+                jittered_samples = X_c[np.random.choice(X_c.shape[0], n_needed, replace=True)] + np.random.normal(0, 0.01, size=(n_needed, X_c.shape[1]))
+                X_c = np.vstack([X_c, jittered_samples])
             X_sub_list.append(torch.tensor(X_c, dtype=torch.float32))
 
         # Confidence for y_prime

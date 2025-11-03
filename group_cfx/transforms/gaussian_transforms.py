@@ -72,8 +72,8 @@ class GaussianTransform(BaseGaussianTransform):
         self.posterior_mu_offset = nn.Parameter(torch.zeros(d))
         self.posterior_marginal_stds = nn.Parameter(torch.zeros(d)+0.00001)
         self.posterior_corr_triang = nn.Parameter(torch.zeros(d * (d - 1) // 2)+0.00001)
-        self.xl = [-5.0]*d + [1e-6]*d + [-0.999]*(d*(d-1)//2)
-        self.xu = [5.0]*d + [1.5]*d + [0.999]*(d*(d-1)//2)
+        self.xl = [-8.0]*d + [1e-6]*d + [-0.999]*(d*(d-1)//2)
+        self.xu = [8.0]*d + [1.5]*d + [0.999]*(d*(d-1)//2)
         self.blp_proxy = blp_proxy
 
     def lipschitz_proxy(self, X_orig = None):
@@ -218,8 +218,8 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         self.posterior_mu_offset = nn.Parameter(torch.zeros(d))
         # Scaling factor. A single parameter
         self.posterior_eigenvalues  = nn.Parameter(torch.ones(d)-0.5)
-        self.xl = [-5.0] * d + [1e-6]*d
-        self.xu = [5.0] * d + [1]*d
+        self.xl = [-8.0] * d + [1e-6]*d
+        self.xu = [8.0] * d + [1]*d
 
     def fit_prior(self, X_orig):
         self.prior_mvn = multivariate_normal(mean=X_orig.mean(axis=0).detach().cpu().numpy(),
@@ -287,11 +287,11 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         # optional lower bound for bi-Lipschitz (uncomment if needed)
         constraints.append(s >= (1.0 / K) * sqrt_d0)
 
-        # Constraint the variable range as well
+        '''# Constraint the variable range as well
         constraints.append(mu1_offset >= np.array(self.xl[:d]))
         constraints.append(mu1_offset <= np.array(self.xu[:d]))
         constraints.append(s >= np.array(self.xl[d:]))
-        constraints.append(s <= np.array(self.xu[d:]))
+        constraints.append(s <= np.array(self.xu[d:]))'''
 
         # Construct full A as a CVXPY expression: A = sum_j (s_j / sqrt_d0_j) * (u_j u_j^T)
         A_expr = sum((s[j] * inv_sqrt_d0[j]) * UiUiT[j] for j in range(d))  # shape (d,d) CVXPY expression
@@ -363,8 +363,8 @@ class GaussianScaleTransform(BaseGaussianTransform) :
         super().__init__()
         self.posterior_mu_offset = nn.Parameter(torch.zeros(d))
         self.scaling = nn.Parameter(torch.tensor(1.0))
-        self.xl = [-5.0] * d + [1e-6]
-        self.xu = [5.0] * d + [2.0]
+        self.xl = [-8.0] * d + [1e-6]
+        self.xu = [8.0] * d + [2.0]
 
     def build_mvn(self):
         covariance_matrix_posterior = self.prior_mvn.cov
@@ -434,11 +434,11 @@ class GaussianScaleTransform(BaseGaussianTransform) :
         else:
             constraints.append(logits <= margin_logit)
 
-        # Constrain the variable range as well
+        '''# Constrain the variable range as well
         constraints.append(b >= np.array(self.xl[:d]))
         constraints.append(b <= np.array(self.xu[:d]))
         constraints.append(t >= np.sqrt(self.xl[d]))
-        constraints.append(t <= np.sqrt(self.xu[d]))
+        constraints.append(t <= np.sqrt(self.xu[d]))'''
 
         # --- Solve ----------------------------------------------------------------
         prob = cp.Problem(objective, constraints)

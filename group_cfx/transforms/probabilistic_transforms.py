@@ -52,13 +52,13 @@ class GMMForwardTransform(ProbabilisticTransform) :
         self.means_offset = nn.Parameter(torch.zeros(n_components, d))
         self.marginal_stds = nn.Parameter(torch.ones(n_components, d)*0.1)
         self.corr_triang = nn.Parameter(torch.zeros(n_components, d * (d - 1) // 2)+0.1)
-        self.xl = [-5.0]* (n_components * d) + [0.00001]*(n_components * d) + [-0.99999]*(n_components * (d*(d-1)//2))
-        self.xu = [5.0]* (n_components * d) + [1]*(n_components * d) + [0.99999]*(n_components * (d*(d-1)//2))
+        self.xl = [-8.0]* (n_components * d) + [0.00001]*(n_components * d) + [-0.99999]*(n_components * (d*(d-1)//2))
+        self.xu = [8.0]* (n_components * d) + [1]*(n_components * d) + [0.99999]*(n_components * (d*(d-1)//2))
 
     def fit_prior(self, X_orig):
         # Fit a GMM to the original data using sklearn
         X_np = X_orig.detach().cpu().numpy()
-        gmm = GaussianMixture(n_components=self.n_components, covariance_type='full', random_state=0)
+        gmm = GaussianMixture(n_components=self.n_components, covariance_type='full', random_state=0, reg_covar=1e-6)
         gmm.fit(X_np)
         self.prior_gmm_skl = gmm
         self.prior_gmm = []
