@@ -1,6 +1,9 @@
+import cvxpy as cp
 import matplotlib.pyplot as plt
 import numpy as np
+import sklearn
 import torch
+from scipy.linalg import sqrtm
 from scipy.special import digamma
 from scipy.stats._multivariate import multivariate_normal_gen
 from torch import nn
@@ -9,7 +12,7 @@ from sklearn.mixture import GaussianMixture
 
 from group_cfx.transforms.functional_transforms import BaseTransform
 from group_cfx.transforms.utils import wasserstein_distance_normals, compute_A, build_covariance_matrix, \
-    bi_lipschitz_metric
+    bi_lipschitz_metric, init_solving
 
 
 class ProbabilisticTransform(BaseTransform):
@@ -90,8 +93,9 @@ class GMMForwardTransform(ProbabilisticTransform) :
         self.A = []
         self.B = []
         for i in range(self.n_components):
-            A_i = torch.tensor(compute_A(self.prior_gmm[i].cov, self.posterior_gmm[i].cov))
-            B_i = torch.tensor((self.posterior_gmm[i].mean - self.prior_gmm[i].mean))
+            A_i_array = compute_A(self.prior_gmm[i].cov, self.posterior_gmm[i].cov)
+            A_i = torch.tensor(A_i_array)
+            B_i = torch.tensor((self.posterior_gmm[i].mean - self.prior_gmm[i].mean * A_i_array.T))
             self.A.append(A_i)
             self.B.append(B_i)
 
@@ -114,6 +118,36 @@ class GMMForwardTransform(ProbabilisticTransform) :
         x_transformed_selected = np.array([x_transformed_all[j, :, component_choices[j]] for j in range(x_np.shape[0])])
         return self.clip_to_box(torch.tensor(x_transformed_selected, dtype=x.dtype, device=x.device))
 
+    def forward_probabilistic(self ,x) -> list[multivariate_normal_gen]:
+        # Compute responsibilities
+        x_np = x.detach().cpu().numpy()
+        log_probs = np.array([mvn.logpdf(x_np) for mvn in self.prior_gmm]).T
+        log_weights = np.array(self.log_weights)
+        log_responsibilities = log_probs + log_weights
+        # Normalize to get responsibilities
+        max_log_responsibilities = log_responsibilities.max(axis=1, keepdims=True)
+        responsibilities = np.exp(log_responsibilities - max_log_responsibilities)
+        responsibilities /= responsibilities.sum(axis=1, keepdims=True)
+        # Build list of posterior distributions for each input point
+        posterior_list = []
+        for i in range(x_np.shape[0]):
+            # For each point, build a mixture of Gaussians with the posterior components weighted by responsibilities
+            means = []
+            covariances = []
+            weights = []
+            for j in range(self.n_components):
+                means.append(self.posterior_gmm[j].mean)
+                covariances.append(self.posterior_gmm[j].cov)
+                weights.append(responsibilities[i, j])
+            # Create a GaussianMixture object to represent the mixture
+            gmm_post = GaussianMixture(n_components=self.n_components, covariance_type='full')
+            gmm_post.means_ = np.array(means)
+            gmm_post.covariances_ = np.array(covariances)
+            gmm_post.weights_ = np.array(weights)
+            gmm_post.precisions_cholesky_ = np.array([np.linalg.cholesky(np.linalg.inv(cov)) for cov in covariances])
+            posterior_list.append(gmm_post)
+        return posterior_list
+
     def wasserstein_projection_distance(self, X_orig = None):
         # Compute pairwise distances between all components
         W = np.zeros((self.n_components, ))
@@ -134,12 +168,141 @@ class GMMForwardTransform(ProbabilisticTransform) :
         return weighted_wasserstein
 
     def lipschitz_proxy(self, X_orig = None) -> float:
-        if X_orig is None:
+        # Compute mean of A matrices weighted by mixture weights
+        A_mean = torch.zeros_like(self.A[0])
+        weights_prior = np.exp(torch.tensor(self.log_weights))
+        weights_prior /= weights_prior.sum()
+        for i in range(self.n_components):
+            A_mean += weights_prior[i] * self.A[i]
+        # Compute spectral norm of A_mean (A is symmetric PSD)
+        sym_A = 0.5 * (A_mean + A_mean.T)
+        with torch.no_grad():
+            s, _ = torch.linalg.eigh(sym_A)
+            s = torch.sqrt(torch.clamp(s, 0.0))
+            lipschitz_upper = s.max().item()
+            lipschitz_lower = s.min().item()
+            lipschitz = np.min([1 / lipschitz_upper, lipschitz_lower])
+        return 1 - lipschitz
+
+        '''if X_orig is None:
             # Compute the bi-Lipschitz metric by sampling from the joint distribution
             X_orig = self.prior_gmm_skl.sample(1000)[0]
-        return super().lipschitz_proxy(torch.Tensor(X_orig))
+        return super().lipschitz_proxy(torch.Tensor(X_orig))'''
 
+    def cvxpy_solving(self, x : np.ndarray, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
+                      K =1.1, solver = cp.MOSEK) -> float:
+        # Convert x to numpy if it's a torch tensor
+        if isinstance(x, torch.Tensor):
+            x = x.detach().cpu().numpy()
 
+        eps_reg = 1e-9
+        n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
+
+        constraints = []
+
+        mu1_list = []
+        Sigma1_list = []
+        A_list = []
+        objective_list = []
+        #A_mu = cp.Variable((d, d), PSD=True)
+        #b_mu = cp.Variable(d)
+        for j,component in enumerate(self.prior_gmm):
+            mu0 = component.mean.reshape(d, )
+            Sigma0 = component.cov
+            weight = np.exp(self.log_weights[j])
+
+            # decision variables for Q = (mu1, Sigma1) and coupling R
+            mu1 = cp.Variable(d)
+            #mu1 = b_mu + A_mu @ mu0
+            mu1_list.append(mu1)
+            # Sigma1 = cp.Variable((d, d), PSD=True)
+            A = cp.Variable((d, d), PSD=True)
+            A_list.append(A)
+            R = Sigma0 @ A
+            Sigma1 = cp.Variable((d, d), PSD=True)
+            Sigma1_list.append(Sigma1)
+
+            # convex PSD constraint for Gaussian coupling
+            constraints.append(cp.bmat([[Sigma0, R],
+                                    [R.T, Sigma1]]) >> 0)
+
+            # Wasserstein-2 objective
+            bures_const = np.trace(Sigma0)
+            objective_i = weight*(cp.sum_squares(mu1 - mu0)
+                                    + cp.trace(Sigma1)
+                                    + bures_const
+                                    - 2 * cp.trace(R))
+            objective_list.append(objective_i)
+
+            # affine transport map from P→Q: T(x)=mu1 + R.T @ Sigma0_inv @ (x - mu0)
+            X_centered = x - mu0
+            Z_expr = X_centered @ A + mu1
+
+            # classifier constraints
+            logits_expr = Z_expr @ w_model + b_model
+            if int(y_prime) == 1:
+                constraints.append(logits_expr >= margin_logit)
+            else:
+                constraints.append(logits_expr <= margin_logit)
+
+            # Bilipschitz constraints on covariance ratio
+            #constraints.append(A >> (1 / K) * np.eye(d))
+            #constraints.append(A << K * np.eye(d))
+        objective = cp.Minimize(cp.sum(objective_list))
+
+        A_mean = sum([np.exp(self.log_weights[j]) * A_list[j] for j in range(self.n_components)])
+
+        # Bilipschitz constraints on covariance ratio
+        constraints.append(A_mean >> (1 / K) * np.eye(d))
+        constraints.append(A_mean << K * np.eye(d))
+
+        '''# Bilipschitz constraints for offset
+        constraints.append(A_mu >> (1 / K) * np.eye(d))
+        constraints.append(A_mu << K * np.eye(d))'''
+
+        prob = cp.Problem(objective, constraints)
+        prob.solve(solver=solver)
+        if prob.status != cp.OPTIMAL:
+            print("Warning: Problem did not converge")
+
+        with torch.no_grad():
+            # Update model parameters with the solution
+            marginal_stds = []
+            corr_triang = []
+            means_offset = []
+            self.A = []
+            self.B = []
+            for j in range(self.n_components):
+                mu1_sol = mu1_list[j].value
+                A_sol = A_list[j].value
+                # Compute B matrix
+                B_sol = mu1_sol - self.prior_gmm[j].mean @ A_sol.T
+
+                # Manually set affine transforms
+                self.A.append(torch.tensor(A_sol))
+                self.B.append(torch.tensor(B_sol))
+
+                # Update mean offset
+                new_mean_offset = mu1_sol - self.prior_gmm[j].mean
+                means_offset.append(new_mean_offset)
+
+                # Update covariance parameters from A_sol
+                # Compute posterior covariance
+                Sigma1_sol = Sigma1_list[j].value
+                # Decompose Sigma1_sol to stds and correlations
+                stds = np.sqrt(np.diag(Sigma1_sol))
+                corrs = Sigma1_sol / (stds[:, None] @ stds[None, :])
+                # Update parameters
+                marginal_stds.append(stds)
+                # Extract lower-triangular correlations
+                tril_indices = np.tril_indices(d, k=-1)
+                corr_tril = corrs[tril_indices]
+                corr_triang.append(corr_tril)
+            # Rebuild GMM and affine transforms
+            self.means_offset.copy_(torch.tensor(np.array(means_offset), dtype=self.means_offset.dtype, device=self.means_offset.device))
+            self.marginal_stds.copy_(torch.tensor(np.array(marginal_stds), dtype=self.marginal_stds.dtype, device=self.marginal_stds.device))
+            self.corr_triang.copy_(torch.tensor(np.array(corr_triang), dtype=self.corr_triang.dtype, device=self.corr_triang.device))
+            self.build_gmm()
 
 '''
 # Solve the optimal transport problem using the Hungarian algorithm
