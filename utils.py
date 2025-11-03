@@ -244,15 +244,16 @@ def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.
         tn = time.time()
         time.sleep(10)
 
+    wass_test = None
     if X_sub_test is not None:
         with torch.no_grad():
+            print(X_sub_test)
             X_transformed = transform(X_sub_test.to(device)).cpu().numpy()
-        wass = np.mean(np.linalg.norm(X_transformed - X_sub_test.numpy(), axis=-1, ord=2))
-    else:
-        with torch.no_grad():
-            X_transformed = transform(X_sub_train.to(device)).cpu().numpy()
-        wass = np.mean(np.linalg.norm(X_transformed - X_sub_train.numpy(), axis=-1, ord=2))
-    return wass, tn - t0
+        wass_test = np.mean(np.linalg.norm(X_transformed - X_sub_test.numpy(), axis=-1, ord=2))
+    with torch.no_grad():
+        X_transformed = transform(X_sub_train.to(device)).cpu().numpy()
+    wass = np.mean(np.linalg.norm(X_transformed - X_sub_train.numpy(), axis=-1, ord=2))
+    return wass, wass_test, tn - t0
 
 def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confidence, K, solver, device = "cpu"):
     if isinstance(transform, DirectOptimization):
@@ -262,6 +263,7 @@ def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confid
     n = X_sub.shape[0]
     fold_size = n // 10
     wass_list = []
+    wass_test_list = []
     time_list = []
     for i in range(10):
         start = i * fold_size
@@ -269,12 +271,13 @@ def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confid
         X_sub_train = torch.cat([X_sub[:start], X_sub[end:]], dim=0)
         X_sub_test = X_sub[start:end]
 
-        wass, time = direct_experiment(transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, K, solver,
+        wass, wass_test, time = direct_experiment(transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, K, solver,
                                        device)
 
         wass_list.append(wass)
+        wass_test_list.append(wass_test)
         time_list.append(time)
-    return np.mean(wass_list), np.mean(time_list)
+    return np.mean(wass_list), np.mean(wass_test_list), np.mean(time_list)
 
 def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : torch.Tensor, f, y_prime,
                             y_prime_confidence, solver, device = "cpu", random_seed = 0):

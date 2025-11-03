@@ -242,12 +242,16 @@ if __name__ == "__main__":
                 wass_list = []
                 time_list = []
                 for K in K_list :
-                    wass, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
+                    wass, wass_test, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
                                                  solver=solver)
                     wass_list.append(wass)
+                    if wass_test is None :
+                        wass_test_list.append(wass)
+                    else :
+                        wass_test_list.append(wass_test)
                     time_list.append(exec_time)
                 # Create df and save to csv
-                df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'exec_time': time_list})
+                df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'Wasserstein test': wass_list, 'Time': time_list})
                 df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
             # Non linear using Pymoo
             else :
