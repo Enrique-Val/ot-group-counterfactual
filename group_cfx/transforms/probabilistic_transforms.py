@@ -95,7 +95,7 @@ class GMMForwardTransform(ProbabilisticTransform) :
         for i in range(self.n_components):
             A_i_array = compute_A(self.prior_gmm[i].cov, self.posterior_gmm[i].cov)
             A_i = torch.tensor(A_i_array)
-            B_i = torch.tensor((self.posterior_gmm[i].mean - self.prior_gmm[i].mean * A_i_array.T))
+            B_i = torch.tensor((self.posterior_gmm[i].mean - self.prior_gmm[i].mean @ A_i_array.T))
             self.A.append(A_i)
             self.B.append(B_i)
 
@@ -188,6 +188,10 @@ class GMMForwardTransform(ProbabilisticTransform) :
             # Compute the bi-Lipschitz metric by sampling from the joint distribution
             X_orig = self.prior_gmm_skl.sample(1000)[0]
         return super().lipschitz_proxy(torch.Tensor(X_orig))'''
+
+
+    def is_cvx(self):
+        return True
 
     def cvxpy_solving(self, x : np.ndarray, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence,
                       K =1.1, solver = cp.MOSEK) -> float:

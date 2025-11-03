@@ -230,7 +230,7 @@ if __name__ == "__main__":
 
             if args.math_opt and args.transform not in ['FullAffine', 'PSDAffine', 'DiagonalAffine',
                                                       'GaussianCommutativeTransform', 'GaussianScaleTransform',
-                                                      'DirectOptimization']:
+                                                      'DirectOptimization', 'GaussianTransform', 'GMMForwardTransform']:
                 raise ValueError("Linear solver cannot be used with transform " + args.transform)
 
             if args.math_opt :
