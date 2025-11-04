@@ -236,7 +236,9 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
     def build_mvn(self):
         covariance_matrix_posterior = (self.prior_eigenvectors @
                                       np.diag(self.posterior_eigenvalues.detach().cpu().numpy()) @
-                                      self.prior_eigenvectors.T)
+                                      self.prior_eigenvectors.T) + 1e-6 * np.eye(self.prior_mvn.cov.shape[0])
+        print("Posterior covariance matrix eigenvalues:", np.linalg.eigvalsh(covariance_matrix_posterior))
+        print("Posterior covariance matrix:", covariance_matrix_posterior)
         self.posterior_mvn = multivariate_normal(mean= self.prior_mvn.mean + self.posterior_mu_offset.detach().cpu().numpy(), cov=covariance_matrix_posterior)
 
     def is_cvx(self):
@@ -268,7 +270,7 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         # CVXPY decision variables
         mu1_offset = cp.Variable(d)
         mu1 = mu0 + mu1_offset  # posterior mean
-        s = cp.Variable(d, nonneg=True)  # s_i = sqrt(d1_i) (the sqrt of Sigma1 eigenvalues in basis U)
+        s = cp.Variable(d, pos=True)  # s_i = sqrt(d1_i) (the sqrt of Sigma1 eigenvalues in basis U)
 
         # Build Bures term in this parametrization:
         # sum_i (sqrt(d0_i) - s_i)^2  = sum d0 + sum s^2 - 2 sum sqrt(d0) * s
