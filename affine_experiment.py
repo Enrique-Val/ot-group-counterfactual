@@ -171,7 +171,7 @@ if __name__ == "__main__":
         # Use kmeans clustering (sklearn)
         # If there are more than 20k instances, train only with the first 20k and predict the rest
         if sub_data.shape[0] > 20000:
-            kmeans_alg = KMeans(n_clusters=args.n_clusters, random_state=args.random_seed)
+            kmeans_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
             kmeans_alg.fit(sub_data[:20000])
             cluster_labels = kmeans_alg.predict(sub_data)
         else:
@@ -184,6 +184,7 @@ if __name__ == "__main__":
             X_c = sub_data[cluster_labels == c]
             # Limit to 200 instances for testing
             X_c = X_c[:200]
+            print(X_c.shape)
             # If len X_c < 100, raise an Exception
             if X_c.shape[0] < 20:
                 # Warn the user and introduce synthetic samples by jittering up to 20

@@ -64,10 +64,10 @@ class GMMForwardTransform(ProbabilisticTransform) :
                 gmm = GaussianMixture(n_components=self.n_components, covariance_type='full', random_state=0, reg_covar=eps)
                 gmm.fit(X_np)
                 break
-            except np.linalg.LinAlgError as e:
+            except ValueError as e:
+                print(f"LinAlgError with reg_covar={eps}, trying larger value.")
                 if eps == 1e-3:
                     raise e
-                print(f"LinAlgError with reg_covar={eps}, trying larger value.")
         self.prior_gmm_skl = gmm
         self.prior_gmm = []
         for i in range(self.n_components):
