@@ -39,7 +39,7 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type=str, default='./results', help='Output directory')
     parser.add_argument('--device', type=str, default='cpu', help='Device to use (cpu or cuda)')
     parser.add_argument('--random_seed', type=int, default=0, help='Random seed for reproducibility')
-    parser.add_argument('--n_clusters', type=int, default=5, help='Number of clusters for subgrouping')
+    parser.add_argument('--n_clusters', type=int, default=10, help='Number of clusters for subgrouping')
     parser.add_argument('--transform', type=str, default='FullAffine', help='Type of transform to use',
                         choices=['FullAffine', 'FullAffine_proxy', 'PSDAffine', 'PSDAffine_proxy', 'DiagonalAffine',
                                  'DirectOptimization',
@@ -182,8 +182,8 @@ if __name__ == "__main__":
         X_sub_list = []
         for c in np.unique(cluster_labels):
             X_c = sub_data[cluster_labels == c]
-            # TODO remove, but limit to 500 instances for preliminary testing
-            X_c = X_c[:500]
+            # Limit to 200 instances for testing
+            X_c = X_c[:200]
             # If len X_c < 100, raise an Exception
             if X_c.shape[0] < 20:
                 # Warn the user and introduce synthetic samples by jittering up to 20
@@ -264,7 +264,7 @@ if __name__ == "__main__":
                 elif solver_name == "pymoo":
                     # Example with NSGA2
                     solver = PyMooSolver(
-                        algorithm=NSGA2(pop_size=100, eliminate_duplicates=True),
+                        algorithm=NSGA2(pop_size=100, eliminate_duplicates=True, verbose =args.verbose),
                         termination=DefaultMultiObjectiveTermination(),
                         verbose=args.verbose,
                         min_acc=y_prime_conf

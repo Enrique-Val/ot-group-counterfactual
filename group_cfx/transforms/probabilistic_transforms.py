@@ -58,8 +58,16 @@ class GMMForwardTransform(ProbabilisticTransform) :
     def fit_prior(self, X_orig):
         # Fit a GMM to the original data using sklearn
         X_np = X_orig.detach().cpu().numpy()
-        gmm = GaussianMixture(n_components=self.n_components, covariance_type='full', random_state=0, reg_covar=1e-6)
-        gmm.fit(X_np)
+        gmm = None
+        for eps in [1e-6, 1e-5, 1e-4, 1e-3]:
+            try:
+                gmm = GaussianMixture(n_components=self.n_components, covariance_type='full', random_state=0, reg_covar=eps)
+                gmm.fit(X_np)
+                break
+            except np.linalg.LinAlgError as e:
+                if eps == 1e-3:
+                    raise e
+                print(f"LinAlgError with reg_covar={eps}, trying larger value.")
         self.prior_gmm_skl = gmm
         self.prior_gmm = []
         for i in range(self.n_components):
