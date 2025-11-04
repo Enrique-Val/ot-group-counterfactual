@@ -98,12 +98,7 @@ class GaussianTransform(BaseGaussianTransform):
     def build_mvn(self):
         covariance_matrix_posterior = build_covariance_matrix(self.posterior_marginal_stds.detach().cpu().numpy(), self.posterior_corr_triang.detach().cpu().numpy())
         # Check if covariance_matrix_posterior is positive definite
-        eigvals = np.linalg.eigvalsh(covariance_matrix_posterior)
-        if np.any(eigvals <= 0):
-            #print("Warning: Posterior covariance matrix is not positive definite. Adjusting to nearest PD matrix.")
-            # Adjust to nearest positive definite matrix (simple fix)
-            min_eig = np.min(eigvals)
-            covariance_matrix_posterior += (-min_eig + 1e-6) * np.eye(covariance_matrix_posterior.shape[0])
+        covariance_matrix_posterior = covariance_matrix_posterior + 1e-6 * np.eye(self.prior_mvn.cov.shape[0])
         self.posterior_mvn = multivariate_normal(mean=self.prior_mvn.mean + self.posterior_mu_offset.detach().cpu().numpy(), cov=covariance_matrix_posterior)
 
     def is_cvx(self):
@@ -219,7 +214,7 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
 
     def fit_prior(self, X_orig):
         self.prior_mvn = multivariate_normal(mean=X_orig.mean(axis=0).detach().cpu().numpy(),
-                                             cov=np.cov(X_orig.detach().cpu().numpy(), rowvar=False))
+                                             cov=np.cov(X_orig.detach().cpu().numpy(), rowvar=False) + 1e-6 * np.eye(X_orig.shape[1]))
         self.prior_eigenvalues, self.prior_eigenvectors = np.linalg.eigh(self.prior_mvn.cov)
         self.build_mvn()
         self.derive_affine_transform()
@@ -365,7 +360,7 @@ class GaussianScaleTransform(BaseGaussianTransform) :
     def build_mvn(self):
         covariance_matrix_posterior = self.prior_mvn.cov
         self.posterior_mvn = multivariate_normal(mean=self.prior_mvn.mean + self.posterior_mu_offset.detach().cpu().numpy(),
-                                                 cov=self.scaling.item() * covariance_matrix_posterior)
+                                                 cov=self.scaling.item() * covariance_matrix_posterior + 1e-6 * np.eye(self.prior_mvn.cov.shape[0]))
 
     def derive_affine_transform(self):
         self.B = torch.tensor(self.posterior_mvn.mean - self.prior_mvn.mean*self.scaling.item())
@@ -407,7 +402,7 @@ class GaussianScaleTransform(BaseGaussianTransform) :
         # --- Variables ------------------------------------------------------------
         b = cp.Variable(d)  # mean offset
         # s = cp.Variable()  # scalar scaling
-        t = cp.Variable()  # t = sqrt(s)
+        t = cp.Variable(pos = True)  # t = sqrt(s)
 
         # --- W2 objective (closed form) ------------------------------------------
         # W2^2 = ||mu_1 - m_x||^2 + (sqrt(s) - 1)^2 * Tr(Sigma_x)
