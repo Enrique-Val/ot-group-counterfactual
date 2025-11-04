@@ -240,6 +240,7 @@ if __name__ == "__main__":
                 solver = cv.MOSEK if not args.transform in ["DirectOptimization","FullAffine"] else "gurobi"
                 K_list = [5.0, 10.0, 15.0, 20.0, 25.0]
                 wass_list = []
+                wass_test_list = []
                 time_list = []
                 for K in K_list :
                     wass, wass_test, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
@@ -251,7 +252,7 @@ if __name__ == "__main__":
                         wass_test_list.append(wass_test)
                     time_list.append(exec_time)
                 # Create df and save to csv
-                df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'Wasserstein test': wass_list, 'Time': time_list})
+                df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'Wasserstein test': wass_test_list, 'Time': time_list})
                 df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
             # Non linear using Pymoo
             else :

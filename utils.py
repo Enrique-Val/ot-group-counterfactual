@@ -247,7 +247,6 @@ def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.
     wass_test = None
     if X_sub_test is not None:
         with torch.no_grad():
-            print(X_sub_test)
             X_transformed = transform(X_sub_test.to(device)).cpu().numpy()
         wass_test = np.mean(np.linalg.norm(X_transformed - X_sub_test.numpy(), axis=-1, ord=2))
     with torch.no_grad():

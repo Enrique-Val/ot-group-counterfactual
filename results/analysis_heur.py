@@ -60,7 +60,7 @@ if __name__ == "__main__":
     label_clusters = label_clusters[:2]
 
     # First, remove self-dominated solutions and collect all non-dominated solutions across transforms, datasets, label_clusters and CVF
-    for str, results_crude_i in zip(["", " test"], [results_crude_train, results_crude_test]):
+    for str_i, results_crude_i in zip(["", " test"], [results_crude_train, results_crude_test]):
         for dataset in datasets:
             for transform in transforms:
                 for label_cluster_i in label_clusters:
@@ -74,15 +74,14 @@ if __name__ == "__main__":
                             df_clean = pd.DataFrame()
                             for cvi in range(1,11):
                                 df_cvi = df[df["CVF"] == cvi]
-                                df_cvi_clean = remove_self_dominated(df_cvi, df_cvi, "Wasserstein"+str, "Lipschitz"+str)
+                                df_cvi_clean = remove_self_dominated(df_cvi, df_cvi, "Wasserstein" + str_i, "Lipschitz" + str_i)
                                 df_clean = pd.concat([df_clean, df_cvi_clean])
                             results_crude_i[dataset][transform][label_cluster_i] = df_clean.reset_index(drop=True)
 
-
-    for str, results_crude_i in zip(["", " test"], [results_crude_train, results_crude_test]):
+    for str_i, results_crude_i in zip(["", " test"], [results_crude_train, results_crude_test]):
         metrics = ["Min " + i for i in results_crude_i[datasets[0]][transforms[0]][label_clusters[0]].columns[1:]]  + ["Domination percent"]
-        wass_str = "Wasserstein" + str
-        lip_str = "Lipschitz" + str
+        wass_str = "Wasserstein" + str_i
+        lip_str = "Lipschitz" + str_i
 
         # Prepare storage for results
         results ={}
@@ -123,7 +122,7 @@ if __name__ == "__main__":
                     if not transform == "DirectOptimization" :
                         res_cvi = res[res["CVF"] == cvi]
                     else :
-                        res_cvi =  res
+                        res_cvi = pd.DataFrame(columns=[wass_str, lip_str], data=results_crude_train[dataset][transform][label_cluster_i].to_numpy())
                     # Compute min metrics
                     min_wass.append(res_cvi[wass_str].min())
                     min_lip.append(res_cvi[lip_str].min())
@@ -146,7 +145,18 @@ if __name__ == "__main__":
             print(results[dataset][transform][label_cluster_i])
             print("--------------------------------------------------")
 
-        raise SystemExit
+        # Iterate and put into a single df for further analysis if needed
+        df_joint = pd.DataFrame(columns = metrics)
+        for dataset, transform, label_cluster_i in itertools.product(datasets, transforms, label_clusters):
+            df_i = results[dataset][transform][label_cluster_i]
+            df_i = df_i.to_frame().T
+            df_i["Dataset"] = dataset
+            df_i["Transform"] = transform
+            df_i["Label_Cluster"] = str(label_cluster_i)
+            df_joint = pd.concat([df_joint, df_i], ignore_index=True)
+        print("Joint results df:")
+        print(df_joint)
+
 
 
 
