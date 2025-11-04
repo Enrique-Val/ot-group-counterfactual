@@ -203,10 +203,6 @@ class GaussianTransform(BaseGaussianTransform):
             self.A = torch.tensor(A_val, dtype=self.A.dtype, device=self.A.device)
             self.B = torch.tensor(b_val, dtype=self.B.dtype, device=self.B.device)
 
-            print("Sigma1", Sigma1_val)
-            print("Sigma0", Sigma0)
-            print("Sigma1 inferred", self.A.detach().cpu().numpy() @ Sigma0 @ self.A.detach().cpu().numpy().T)
-            print("A", A_val)
         # return same structure as before
         return prob
 
@@ -237,8 +233,6 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         covariance_matrix_posterior = (self.prior_eigenvectors @
                                       np.diag(self.posterior_eigenvalues.detach().cpu().numpy()) @
                                       self.prior_eigenvectors.T) + 1e-6 * np.eye(self.prior_mvn.cov.shape[0])
-        print("Posterior covariance matrix eigenvalues:", np.linalg.eigvalsh(covariance_matrix_posterior))
-        print("Posterior covariance matrix:", covariance_matrix_posterior)
         self.posterior_mvn = multivariate_normal(mean= self.prior_mvn.mean + self.posterior_mu_offset.detach().cpu().numpy(), cov=covariance_matrix_posterior)
 
     def is_cvx(self):
