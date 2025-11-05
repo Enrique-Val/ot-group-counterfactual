@@ -157,6 +157,9 @@ class FullAffine(BaseTransform):
         solver_instance = pyo.SolverFactory(solver)
         if solver == "gurobi":
             solver_instance.options['NonConvex'] = 2
+            solver_instance.options["Presolve"] = 0
+            solver_instance.options['PreQLinearize'] = 2
+            solver_instance.options['MIPFocus'] = 1
         res = solver_instance.solve(m)
 
         if res.solver.termination_condition != pyo.TerminationCondition.optimal:

@@ -242,7 +242,6 @@ def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.
         t0 = time.time()
         pv = transform.pyomo_solving(X_sub_train, f , y_prime=y_prime, y_prime_confidence=y_prime_confidence, K=K, solver=solver)
         tn = time.time()
-        time.sleep(10)
 
     wass_test = None
     if X_sub_test is not None:
