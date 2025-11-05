@@ -49,6 +49,8 @@ if __name__ == "__main__":
     parser.add_argument('--only_train', action='store_true', help='Only train the classifier and density estimator')
     args = parser.parse_args()
 
+    np.random.seed(args.random_seed)
+
     t0 = time.time()
 
     # Create output directory if it does not exist

@@ -4,10 +4,11 @@ import re
 
 import numpy as np
 import pandas as pd
+from pyomo.contrib.parmest.graphics import sns
 
 
 def list_params(root_dir, n_clusters=5, exp_type = "math_opt"):
-    datasets = [i for i in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, i)) and not i.startswith('_')]
+    datasets = [i for i in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, i)) and not i.startswith('_') and not i == "plots"]
     data_dir = os.path.join(root_dir, datasets[0], str(n_clusters), exp_type)
     transforms = []
     for transform in os.listdir(data_dir):
@@ -101,3 +102,16 @@ def friedman_posthoc(data, correct="bergmann", eps = 1e-5) -> dict[str, pd.DataF
     bh_posthoc["p_adjusted"] = bh_posthoc["p_adjusted"].clip(lower=eps)
 
     return bh_posthoc
+
+renaming = {"DiagonalAffine" : "Diag. \n affine", "GaussianCommutativeTransform" : "Comm. \n Gaussian",
+                "GaussianTransform" : "Any \n Gaussian", "PSDAffine" : "PSD \n affine", "GMMForwardTransform" : "3-GMM",
+                "DirectOptimization" : "Baseline", "FullAffine" : "Any \n affine",
+             "GaussianScaledTransform" : "Scaled \n Gaussian"}
+
+plot_order = ["Baseline", "Any \n affine", "PSD \n affine", "Diag. \n affine", "Any \n Gaussian", "Comm. \n Gaussian", "Scaled \n Gaussian" , "3-GMM"]
+
+
+palette = sns.color_palette("husl", len(plot_order))
+palette = {t: palette[i] for i, t in enumerate(plot_order)}
+
+fig_size = (6.75,3.5)

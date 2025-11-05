@@ -55,6 +55,10 @@ class GMMForwardTransform(ProbabilisticTransform) :
         self.xl = [-8.0]* (n_components * d) + [0.00001]*(n_components * d) + [-0.99999]*(n_components * (d*(d-1)//2))
         self.xu = [8.0]* (n_components * d) + [1]*(n_components * d) + [0.99999]*(n_components * (d*(d-1)//2))
 
+        # Accelerate computing
+        self.prior_sqrt_cov = None
+        self.prior_inv_sqrt_cov = None
+
     def fit_prior(self, X_orig):
         # Fit a GMM to the original data using sklearn
         X_np = X_orig.detach().cpu().numpy()
@@ -70,10 +74,17 @@ class GMMForwardTransform(ProbabilisticTransform) :
                     raise e
         self.prior_gmm_skl = gmm
         self.prior_gmm = []
+        self.prior_sqrt_cov = []
+        self.prior_inv_sqrt_cov = []
         for i in range(self.n_components):
             mvn = multivariate_normal(mean=gmm.means_[i], cov=gmm.covariances_[i])
             self.prior_gmm.append(mvn)
             self.log_weights.append(np.log(gmm.weights_[i] + 1e-10))  # Avoid log(0)
+            # Precompute sqrt and inv sqrt of covariance
+            sqrt_cov = sqrtm(gmm.covariances_[i])
+            inv_sqrt_cov = np.linalg.inv(sqrt_cov)
+            self.prior_sqrt_cov.append(sqrt_cov)
+            self.prior_inv_sqrt_cov.append(inv_sqrt_cov)
         self.build_gmm()
         self.derive_affine_transform()
 
@@ -101,7 +112,7 @@ class GMMForwardTransform(ProbabilisticTransform) :
         self.A = []
         self.B = []
         for i in range(self.n_components):
-            A_i_array = compute_A(self.prior_gmm[i].cov, self.posterior_gmm[i].cov)
+            A_i_array = compute_A(self.prior_gmm[i].cov, self.posterior_gmm[i].cov, self.prior_sqrt_cov[i], self.prior_inv_sqrt_cov[i])
             A_i = torch.tensor(A_i_array)
             B_i = torch.tensor((self.posterior_gmm[i].mean - self.prior_gmm[i].mean @ A_i_array.T))
             self.A.append(A_i)

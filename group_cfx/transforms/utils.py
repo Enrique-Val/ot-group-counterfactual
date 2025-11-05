@@ -71,41 +71,30 @@ def build_covariance_matrix(marginal_stds, correlation_triangle) :
     Sigma = (Sigma + Sigma.T) / 2
     return Sigma
 
-def compute_A(sigma1: np.ndarray, sigma2: np.ndarray, tol: float = 1e-12) -> np.ndarray:
+def compute_A(sigma1: np.ndarray, sigma2: np.ndarray, Sigma1_sqrt = None, Sigma1_inv_sqrt= None, tol: float = 1e-12) -> np.ndarray:
     """
     Compute A = Sigma1^{-1/2} ( Sigma1^{1/2} Sigma2 Sigma1^{1/2} )^{1/2} Sigma1^{-1/2}.
     Works for PSD (possibly singular) Sigma1 and PSD Sigma2.
     Returns a symmetric matrix (numerical symmetrization applied).
     """
-    # symmetrize inputs
+    '''# symmetrize inputs
     sigma1 = (sigma1 + sigma1.T) / 2
-    sigma2 = (sigma2 + sigma2.T) / 2
+    sigma2 = (sigma2 + sigma2.T) / 2'''
 
-    # eigendecomposition of sigma1
-    w1, V1 = np.linalg.eigh(sigma1)
-    # threshold small/negative eigenvalues
-    w1_clipped = np.clip(w1, a_min=0.0, a_max=None)
-    # sqrt and inv-sqrt (use 0 where eigenvalue ~ 0)
-    sqrt_w1 = np.sqrt(w1_clipped)
-    inv_sqrt_w1 = np.zeros_like(sqrt_w1)
-    mask = sqrt_w1 > tol
-    inv_sqrt_w1[mask] = 1.0 / sqrt_w1[mask]
-
-
-    Sigma1_sqrt = sqrtm(sigma1)
-    Sigma1_inv_sqrt = inv(sqrtm(sigma1))
-
-    #raise ValueError("Stop here")
+    if Sigma1_sqrt is None or Sigma1_inv_sqrt is None:
+        Sigma1_sqrt = sqrtm(sigma1)
+        Sigma1_inv_sqrt = inv(sqrtm(sigma1))
 
     # middle = Sigma1^{1/2} Sigma2 Sigma1^{1/2}
     middle = Sigma1_sqrt @ sigma2 @ Sigma1_sqrt
     #middle = (middle + middle.T) / 2
 
     # eigen-decomposition of middle and its sqrt (clip small negative evs due to num error)
-    w2, V2 = np.linalg.eigh(middle)
+    '''w2, V2 = np.linalg.eigh(middle)
     w2_clipped = np.clip(w2, a_min=0.0, a_max=None)
     sqrt_w2 = np.sqrt(w2_clipped)
-    middle_sqrt = (V2 * sqrt_w2) @ V2.T
+    middle_sqrt = (V2 * sqrt_w2) @ V2.T'''
+    middle_sqrt = sqrtm(middle)
 
 
     # assemble A
@@ -116,20 +105,22 @@ def compute_A(sigma1: np.ndarray, sigma2: np.ndarray, tol: float = 1e-12) -> np.
     A = A.astype(np.float32)
     return A.real
 
-def compute_A_commuting(sigma1: np.ndarray, sigma2: np.ndarray, tol: float = 1e-12) -> np.ndarray:
+def compute_A_commuting(sigma1: np.ndarray, sigma2: np.ndarray, w1=None, Q=None, w2=None, tol: float = 1e-12) -> np.ndarray:
     """
     Fast computation of A when sigma1 and sigma2 commute.
     sigma1, sigma2 assumed symmetric PSD.
     """
-    # symmetrize
+    '''# symmetrize
     sigma1 = (sigma1 + sigma1.T) / 2
-    sigma2 = (sigma2 + sigma2.T) / 2
+    sigma2 = (sigma2 + sigma2.T) / 2'''
 
-    # diagonalize sigma1
-    w1, Q = np.linalg.eigh(sigma1)
+    # diagonalize sigma1 if not given
+    if w1 is None or Q is None:
+        w1, Q = np.linalg.eigh(sigma1)
+
     # sigma2 in same basis
-    sigma2_diag = np.diag(Q.T @ sigma2 @ Q)
-    w2 = sigma2_diag
+    if w2 is None:
+        w2 = np.diag(Q.T @ sigma2 @ Q)
 
     # mask nonzero directions
     nonzero = w1 > tol
@@ -139,12 +130,12 @@ def compute_A_commuting(sigma1: np.ndarray, sigma2: np.ndarray, tol: float = 1e-
     if np.any((~nonzero) & (np.abs(w2) > tol)):
         raise ValueError("Incompatible: sigma1 has zero eigenvalue where sigma2 is nonzero.")
 
-    lamA[nonzero] = np.sqrt(np.clip(w2[nonzero], 0, None) / w1[nonzero])
+    lamA[nonzero] = np.sqrt(np.clip(w2[nonzero], tol, None) / w1[nonzero])
 
     # reconstruct A
     A = (Q * lamA) @ Q.T
     A = A.astype(np.float32)
-    return A  # symmetrize for safety
+    return A
 
 def init_solving(x: np.ndarray, model: sklearn.linear_model.LogisticRegression, y_prime,
                  y_prime_confidence):

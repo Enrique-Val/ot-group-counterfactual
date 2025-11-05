@@ -8,7 +8,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from results.utils import list_params, load_results, friedman_posthoc
+from results.utils import list_params, load_results, friedman_posthoc, palette, renaming, plot_order, fig_size
 
 import scikit_posthocs as sp
 
@@ -30,6 +30,12 @@ def remove_self_dominated(df1, df2, wass_str, lip_str):
     return df1[pareto_mask].reset_index(drop=True)
 
 if __name__ == "__main__":
+    # Create dir for plots if it does not exist
+    plots_dir = os.path.join(root_dir, "plots", "heuristic")
+    if not os.path.exists(plots_dir):
+        os.makedirs(plots_dir)
+
+
     datasets, transforms, label_clusters = list_params(root_dir, n_clusters=5, exp_type="heuristic")
     print(datasets)
     print(transforms)
@@ -182,32 +188,81 @@ if __name__ == "__main__":
     # Exlude transforms with word "proxy" in their name for the plots
     df_joint_train = df_joint_train[~df_joint_train["Transform"].str.contains("proxy")]
     df_joint_test = df_joint_test[~df_joint_test["Transform"].str.contains("proxy")]
-    transforms = [t for t in transforms if not "proxy" in t]
+
 
     # Drop rows with NaN values
     df_joint_train = df_joint_train.dropna().reset_index(drop=True)
     df_joint_test = df_joint_test.dropna().reset_index(drop=True)
 
-    palette = sns.color_palette("husl", n_colors=len(transforms))
-    palette = {transform: palette[i] for i, transform in enumerate(transforms)}
+    # Rename transforms for better visualization
+    df_joint_train["Transform"] = df_joint_train["Transform"].map(renaming)
+    df_joint_test["Transform"] = df_joint_test["Transform"].map(renaming)
+
+    actual_transforms = [i for i in plot_order if i in df_joint_train["Transform"].unique()]
+    #actual_transforms = plot_order
+    n_transforms = len(actual_transforms)
 
     for df_joint,str_i in zip([df_joint_train, df_joint_test], ["", " test"]):
         #Boxplot, where each box is the transform. One plot per metric, aggregated over datasets and label_clusters
         metrics = ["Min Wasserstein", "Min Lipschitz", "Domination percent"]
         metrics = [m + str_i for m in metrics]
-        for metric in metrics:
-            fig = plt.figure(figsize=(15, 10))
+        for metric,metric_str in zip(metrics, ["Norm. min. squared W2" , "Norm. min. BL" , "Domination percent"]):
+            fig = plt.figure(figsize=fig_size)
             ax = fig.gca()
             ax.grid(True)
             if "Wasserstein" in metric:
+
                 sns.boxplot(data=df_joint[df_joint["Transform"] != "DirectOptimization"], x="Transform", y=metric, hue="Transform",
-                            palette=palette, showfliers=False, ax=ax)
+                            palette=palette, showfliers=False, ax=ax, order = actual_transforms[1:])
             else :
                 sns.boxplot(data=df_joint, x="Transform", y=metric, hue="Transform",
-                            palette=palette, showfliers=False, ax = ax)
-            #sns.despine()
-            ax.set_title(f"{metric} across datasets and label-clusters")
+                            palette=palette, showfliers=False, ax = ax, order = actual_transforms)
+            sns.despine()
+            ax.set_xlabel("")
+            ax.set_ylabel("")
+            # Remove legend
+            ax.legend_.remove()
+            # Save plot
+            output_file = os.path.join(plots_dir, f"boxplot_{metric.replace(' ', '_')}{str_i}.pdf")
+            fig.savefig(output_file, bbox_inches='tight')
             fig.show()
+
+    # Create join time dataset. Each file has the columns: label, cluster, exec_time
+    df_time = pd.DataFrame(columns=["Dataset", "Transform", "Label_Cluster", "Run time"])
+    for dataset, transform in itertools.product(datasets, transforms):
+        file_name = os.path.join(root_dir, dataset, str(5), "heuristic", transform, f"exec_times.csv")
+        if os.path.exists(file_name):
+            df_times_i = pd.read_csv(file_name)
+            for j in df_times_i.index:
+                label = df_times_i.loc[j, "label"]
+                cluster = df_times_i.loc[j, "cluster"]
+                exec_time = df_times_i.loc[j, "exec_time"]
+                df_time = pd.concat([df_time, pd.DataFrame({
+                    "Dataset": [dataset],
+                    "Transform": [transform],
+                    "Label_Cluster": [(label, cluster)],
+                    "Run time": [exec_time]
+                })], ignore_index=True)
+
+    # Rename transforms for better visualization
+    df_time["Transform"] = df_time["Transform"].map(renaming)
+
+    # Plot time boxplots
+    fig = plt.figure(figsize=fig_size)
+    ax = fig.gca()
+    ax.grid(True)
+    sns.boxplot(data=df_time, x="Transform", y="Run time", hue="Transform",
+                palette=palette, showfliers=False, ax=ax, order=actual_transforms
+                )
+    sns.despine()
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    # Remove legend
+    ax.legend_.remove()
+    # Save plot
+    output_file = os.path.join(plots_dir, f"boxplot_heur_exec_time.pdf")
+    fig.savefig(output_file, bbox_inches='tight')
+    fig.show()
 
     # Same plots, but with Friedman post-hoc test results
     for df_joint, str_i in zip([df_joint_train, df_joint_test], ["", " test"]):
@@ -233,13 +288,6 @@ if __name__ == "__main__":
             )
             ax.set_title(f"Critical Difference Diagram for {metric}")
             fig.show()
-
-
-
-
-
-
-
 
 
     raise ValueError("Stop here")

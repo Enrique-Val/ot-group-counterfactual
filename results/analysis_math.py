@@ -1,6 +1,7 @@
 import os
 import re
 
+import numpy as np
 import pandas as pd
 
 import scikit_posthocs as sp
@@ -8,7 +9,7 @@ import scikit_posthocs as sp
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from results.utils import list_params, load_results, friedman_posthoc
+from results.utils import list_params, load_results, friedman_posthoc, palette, renaming, plot_order, fig_size
 
 root_dir = "../results/"
 n_clusters = 5
@@ -80,6 +81,11 @@ def run_friedman_by_K(all_df, correct="bergmann", palette = None):
     return results
 
 if __name__ == "__main__":
+    # Create a plots subdir
+    plots_dir = os.path.join(root_dir, "plots", "math_opt")
+    if not os.path.exists(plots_dir):
+        os.makedirs(plots_dir)
+
     datasets, transforms, label_clusters = list_params(root_dir, n_clusters=n_clusters, exp_type="math_opt")
     print(datasets)
     print(transforms)
@@ -131,12 +137,6 @@ if __name__ == "__main__":
     all_df = pd.concat(records, ignore_index=True)
 
 
-    renaming = {"DiagonalAffine" : "Diagonal Affine", "GaussianCommutativeTransform" : "Gaussian Commutative",
-                "GaussianTransform" : "Gaussian", "PSDAffine" : "PSD Affine", "GMMForwardTransform" : "GMM",
-                "DirectOptimization" : "Direct Optimization"}
-
-    plot_order = ["PSD Affine", "Diagonal Affine", "Gaussian", "Gaussian Commutative", "GMM"]
-
 
     # Drop DirectOptimization rows
     all_df_no_do = all_df[all_df["transform"] != "DirectOptimization"].reset_index(drop=True)
@@ -146,28 +146,39 @@ if __name__ == "__main__":
     all_df["transform"] = all_df["transform"].replace(renaming)
     all_df_no_do["transform"] = all_df_no_do["transform"].replace(renaming)
 
-    palette = sns.color_palette("husl", len(all_df["transform"].unique()))
-
+    actual_plot_order = [i for i in plot_order if i in all_df_no_do["transform"].unique()]
+    plot_order.remove(actual_plot_order[0])
 
     # make one boxplot per metric
-    for metric in all_df_no_do["metric"].unique():
-        fig = plt.figure(figsize=[12,8])
+    for metric,metric_str in zip(all_df_no_do["metric"].unique(),["Norm. squared W2", "Run time"]):
+        fig = plt.figure(figsize=fig_size)
         ax = fig.gca()
         ax.grid(True)
         subset = all_df_no_do[all_df_no_do["metric"] == metric]
+        print("Medians for metric ", metric)
+        print(subset.groupby("transform")["value"].median())
+        print("Total median" , subset["value"].median())
+        print("-----")
         sns.boxplot(data=subset, x="transform", y="value", color=None, showfliers = False,
                     hue= "transform",
                     palette=palette,
-                    order = plot_order)
+                    order = actual_plot_order,
+                    ax = ax)
         sns.despine()
-        ax.set_title(f"{metric}")
+        #ax.set_title(f"{metric}")
         n = len(subset[subset["transform"] == plot_order[0]])
         # Write the number of samples per box at the top of the plot
-        ax.text(0.5, 0.05, "n = " + str(n), horizontalalignment='center',
+        ax.text(0.5, 1 * np.quantile(subset["value"],0.9), "n = " + str(n), horizontalalignment='center',
                       verticalalignment='center', fontsize=10)
         fig.suptitle("")
         ax.set_xlabel("Transform")
-        ax.set_ylabel(metric)
+        ax.set_ylabel(metric_str)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        fig.tight_layout()
+        # Save plot
+        plot_path = os.path.join(plots_dir, f"boxplot_{metric.replace(' ','_')}.pdf")
+        fig.savefig(plot_path)
         fig.show()
 
     # make one boxplot per metric
@@ -181,15 +192,15 @@ if __name__ == "__main__":
             sns.boxplot(data=subset, x="transform", y="value", color=None, showfliers=False,
                         hue="transform",
                         palette=palette,
-                        order=plot_order, ax = ax)
+                        order=actual_plot_order, ax = ax)
             sns.despine()
             n = len(subset[subset["transform"] == plot_order[0]])
             # Write the number of samples per box at the top of the plot
             ax.text(0.5, 0.05, "n = " + str(n), horizontalalignment='center',
                     verticalalignment='center', fontsize=10)
             ax.set_title(f"{metric} for K={K_val}")
-            ax.set_xlabel("Transform")
-            ax.set_ylabel(metric)
+            ax.set_xlabel("")
+            ax.set_ylabel("")
         print()
         fig.show()
 
