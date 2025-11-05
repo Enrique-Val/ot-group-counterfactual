@@ -4,12 +4,13 @@ import torch
 from scipy.linalg import sqrtm, inv
 
 
-def wasserstein_distance_normals(m0, C0, m1, C1) :
+def wasserstein_distance_normals(m0, C0, m1, C1, sqrt_C0=None) :
     # Mean term
     mean_diff = np.linalg.norm(m0 - m1) ** 2
 
     # Covariance term
-    sqrt_C0 = sqrtm(C0)
+    if sqrt_C0 is None:
+        sqrt_C0 = sqrtm(C0)
     middle = sqrtm(sqrt_C0 @ C1 @ sqrt_C0)
     cov_term = np.trace(C0 + C1 - 2 * middle)
 

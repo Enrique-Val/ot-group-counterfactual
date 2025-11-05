@@ -22,14 +22,23 @@ class BaseGaussianTransform(ProbabilisticTransform):
         self.A = None
         self.B = None
 
+        # Precomputing some values to speed up ¡solving
+        self.prior_eigenvalues = None
+        self.prior_eigenvectors = None
+        self.sigma1_sqrt = None
+        self.sigma1_inv_sqrt = None
+
     def fit_prior(self, X_orig):
         cov = np.cov(X_orig.detach().cpu().numpy(), rowvar=False) + 1e-6 * np.eye(X_orig.shape[1])
         self.prior_mvn = multivariate_normal(mean=X_orig.mean(axis=0).detach().cpu().numpy(), cov=cov)
+        self.prior_eigenvalues, self.prior_eigenvectors = np.linalg.eigh(self.prior_mvn.cov)
+        self.sigma1_sqrt = self.prior_eigenvectors @ np.diag(np.sqrt(np.clip(self.prior_eigenvalues, 1e-6,None))) @ self.prior_eigenvectors.T
+        self.sigma1_inv_sqrt = self.prior_eigenvectors @ np.diag(1.0 / np.sqrt(np.clip(self.prior_eigenvalues, 1e-6,None))) @ self.prior_eigenvectors.T
         self.build_mvn()
         self.derive_affine_transform()
 
     def derive_affine_transform(self):
-        self.A = torch.tensor(compute_A(self.prior_mvn.cov, self.posterior_mvn.cov))
+        self.A = torch.tensor(compute_A(self.prior_mvn.cov, self.posterior_mvn.cov, Sigma1_sqrt=self.sigma1_sqrt, Sigma1_inv_sqrt=self.sigma1_inv_sqrt))
         self.B = torch.tensor((self.posterior_mvn.mean - self.prior_mvn.mean @ self.A.detach().cpu().numpy().T))
 
     def forward(self, x):
@@ -44,7 +53,7 @@ class BaseGaussianTransform(ProbabilisticTransform):
         C0 = self.prior_mvn.cov
         C1 = self.posterior_mvn.cov
 
-        return wasserstein_distance_normals(m0, C0, m1, C1)
+        return wasserstein_distance_normals(m0, C0, m1, C1, sqrt_C0=self.sigma1_sqrt)
 
     def load_parameters(self, flatten_new_params):
         # Call super method
@@ -116,8 +125,7 @@ class GaussianTransform(BaseGaussianTransform):
         mu0 = self.prior_mvn.mean.reshape(d, )
         Sigma0 = self.prior_mvn.cov
 
-        Sigma0_inv = np.linalg.inv(Sigma0)
-        Sigma0_sqrt = sqrtm(Sigma0)
+        Sigma0_sqrt = self.sigma1_sqrt
 
         # decision variables for Q = (mu1, Sigma1) and coupling R
         mu1 = cp.Variable(d)
@@ -204,24 +212,14 @@ class GaussianTransform(BaseGaussianTransform):
 class GaussianCommutativeTransform(BaseGaussianTransform) :
     def __init__(self, d):
         super().__init__()
-        self.prior_eigenvalues = None
-        self.prior_eigenvectors = None
         self.posterior_mu_offset = nn.Parameter(torch.zeros(d))
         # Scaling factor. A single parameter
         self.posterior_eigenvalues  = nn.Parameter(torch.ones(d)-0.5)
         self.xl = [-8.0] * d + [1e-6]*d
         self.xu = [8.0] * d + [1]*d
 
-    def fit_prior(self, X_orig):
-        self.prior_mvn = multivariate_normal(mean=X_orig.mean(axis=0).detach().cpu().numpy(),
-                                             cov=np.cov(X_orig.detach().cpu().numpy(), rowvar=False) + 1e-6 * np.eye(X_orig.shape[1]))
-        self.prior_eigenvalues, self.prior_eigenvectors = np.linalg.eigh(self.prior_mvn.cov)
-        self.build_mvn()
-        self.derive_affine_transform()
-        # Compute eigen decomposition of prior covariance
-
     def derive_affine_transform(self):
-        self.A = torch.tensor(compute_A_commuting(self.prior_mvn.cov, self.posterior_mvn.cov))
+        self.A = torch.tensor(compute_A_commuting(self.prior_mvn.cov, self.posterior_mvn.cov, w1 = self.prior_eigenvalues, Q = self.prior_eigenvectors, w2 = self.posterior_eigenvalues.detach().cpu().numpy()))
         self.B = torch.tensor((self.posterior_mvn.mean - self.prior_mvn.mean @ self.A.detach().cpu().numpy().T))
 
     def build_mvn(self):
@@ -243,10 +241,9 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
 
         mu0 = self.prior_mvn.mean.reshape(d, )
-        Sigma0 = 0.5 * (self.prior_mvn.cov + self.prior_mvn.cov.T) + eps_reg * np.eye(d)
 
         # spectral decompose Sigma0
-        d0, U = np.linalg.eigh(Sigma0)  # d0 sorted ascending
+        d0, U = self.prior_eigenvalues, self.prior_eigenvectors
         # avoid numerical issues
         d0 = np.clip(d0, eps_reg, None)
         sqrt_d0 = np.sqrt(d0)
@@ -270,6 +267,8 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         objective = cp.Minimize(cp.sum_squares(mu1_offset) + bures)
 
         constraints = []
+
+        # Cons
 
         # Lipschitz upper bound: lambda_max(Sigma0^{-1} Sigma1) <= K^2
         # with our parametrization this is: (s_i^2 / d0_i) <= K^2 -> s_i <= K * sqrt(d0_i)
@@ -320,6 +319,7 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         with torch.no_grad():
             self.posterior_mu_offset.copy_(
                 torch.tensor(mu1_offset_val, dtype=self.posterior_mu_offset.dtype, device=self.posterior_mu_offset.device))
+            d1_val = np.clip(d1_val, 1e-9, None)
             self.posterior_eigenvalues.copy_(
                 torch.tensor(d1_val, dtype=self.posterior_eigenvalues.dtype, device=self.posterior_eigenvalues.device))
             self.build_mvn()
@@ -344,7 +344,7 @@ class GaussianCommutativeTransform(BaseGaussianTransform) :
         C0 = self.prior_mvn.cov
         C1 = self.posterior_mvn.cov
 
-        return np.linalg.norm(m0 - m1) ** 2 + np.linalg.norm(sqrtm(C0) - sqrtm(C1), 'fro') ** 2
+        return np.linalg.norm(m0 - m1) ** 2 + np.linalg.norm(self.sigma1_sqrt - sqrtm(C1), 'fro') ** 2
 
 
 

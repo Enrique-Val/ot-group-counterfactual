@@ -178,7 +178,10 @@ class GMMForwardTransform(ProbabilisticTransform) :
             C0 = self.prior_gmm[i].cov
             C1 = self.posterior_gmm[i].cov
 
-            W[i] = wasserstein_distance_normals(m0, C0, m1, C1)
+            # Sqrt of C0
+            sqrt_C0 = self.prior_sqrt_cov[i]
+
+            W[i] = wasserstein_distance_normals(m0, C0, m1, C1, sqrt_C0=sqrt_C0)
 
         # Weight by mixture weights
         weights_prior = np.exp(np.array(self.log_weights))
