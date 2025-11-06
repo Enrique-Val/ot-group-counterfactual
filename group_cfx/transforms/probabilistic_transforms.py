@@ -114,8 +114,9 @@ class GMMForwardTransform(ProbabilisticTransform) :
         self.B = []
         for i in range(self.n_components):
             A_i_array = compute_A(self.prior_gmm[i].cov, self.posterior_gmm[i].cov, self.prior_sqrt_cov[i], self.prior_inv_sqrt_cov[i])
-            A_i = torch.tensor(A_i_array)
-            B_i = torch.tensor((self.posterior_gmm[i].mean - self.prior_gmm[i].mean @ A_i_array.T))
+            with torch.no_grad():
+                A_i = torch.tensor(A_i_array)
+                B_i = torch.tensor((self.posterior_gmm[i].mean - self.prior_gmm[i].mean @ A_i_array.T))
             self.A.append(A_i)
             self.B.append(B_i)
 
@@ -136,7 +137,8 @@ class GMMForwardTransform(ProbabilisticTransform) :
             x_transformed_all[:, :, i] = (x_np @ self.A[i].T.numpy()) + self.B[i].numpy()
         # Select the transformed points
         x_transformed_selected = np.array([x_transformed_all[j, :, component_choices[j]] for j in range(x_np.shape[0])])
-        return self.clip_to_box(torch.tensor(x_transformed_selected, dtype=x.dtype, device=x.device))
+        with torch.no_grad():
+            return self.clip_to_box(torch.tensor(x_transformed_selected, dtype=x.dtype, device=x.device))
 
     def forward_probabilistic(self ,x) -> list[multivariate_normal_gen]:
         # Compute responsibilities
