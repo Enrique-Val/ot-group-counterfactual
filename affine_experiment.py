@@ -277,6 +277,7 @@ if __name__ == "__main__":
                     raise ValueError("Unknown solver")
                 df_results, exec_time = cross_experiment_pymoo(transform, X_sub, f, y_prime, y_prime_conf, solver, random_seed= args.random_seed
                 )
+                print("Solved label", y_orig, "cluster", i, "in", exec_time, "seconds")
                 # Save results to csv
                 df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
                 # Store exec time

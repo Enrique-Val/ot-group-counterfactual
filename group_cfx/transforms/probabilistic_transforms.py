@@ -59,6 +59,9 @@ class GMMForwardTransform(ProbabilisticTransform) :
         self.prior_sqrt_cov = None
         self.prior_inv_sqrt_cov = None
 
+        # Doubling prior_gmm for some acceleration
+        self.prior_gmm_torch: list[torch.distributions.MultivariateNormal] = []  # Placeholder for prior distribution
+
     def fit_prior(self, X_orig):
         # Fit a GMM to the original data using sklearn
         X_np = X_orig.detach().cpu().numpy()
@@ -80,6 +83,10 @@ class GMMForwardTransform(ProbabilisticTransform) :
         for i in range(self.n_components):
             mvn = multivariate_normal(mean=gmm.means_[i], cov=gmm.covariances_[i])
             self.prior_gmm.append(mvn)
+            with torch.no_grad():
+                mvn_torch = torch.distributions.MultivariateNormal(loc=torch.tensor(gmm.means_[i], dtype=X_orig.dtype, device=X_orig.device),
+                                                                   covariance_matrix=torch.tensor(gmm.covariances_[i], dtype=X_orig.dtype, device=X_orig.device))
+                self.prior_gmm_torch.append(mvn_torch)
             self.log_weights.append(np.log(gmm.weights_[i] + 1e-10))  # Avoid log(0)
             # Precompute sqrt and inv sqrt of covariance
             sqrt_cov = sqrtm(gmm.covariances_[i])
@@ -121,24 +128,34 @@ class GMMForwardTransform(ProbabilisticTransform) :
             self.B.append(B_i)
 
     def forward(self, x):
-        # Compute responsibilities
-        x_np = x.detach().cpu().numpy()
-        log_probs = np.array([mvn.logpdf(x_np) for mvn in self.prior_gmm]).T
-        log_weights = np.array(self.log_weights)
-        log_responsibilities = log_probs + log_weights
-        # Random approach. Sample one component according to responsibilities
-        max_log_responsibilities = log_responsibilities.max(axis=1, keepdims=True)
-        responsibilities = np.exp(log_responsibilities - max_log_responsibilities)
-        responsibilities /= responsibilities.sum(axis=1, keepdims=True)
-        component_choices = [np.random.choice(self.n_components, p=responsibilities[i]) for i in range(x_np.shape[0])]
-        # Transform each point according to all components. Then select the transformed point according to the sampled component
-        x_transformed_all = np.ndarray(shape=(x_np.shape[0], x_np.shape[1], self.n_components))
-        for i in range(self.n_components):
-            x_transformed_all[:, :, i] = (x_np @ self.A[i].T.numpy()) + self.B[i].numpy()
-        # Select the transformed points
-        x_transformed_selected = np.array([x_transformed_all[j, :, component_choices[j]] for j in range(x_np.shape[0])])
         with torch.no_grad():
-            return self.clip_to_box(torch.tensor(x_transformed_selected, dtype=x.dtype, device=x.device))
+            # log-probs for each component
+            log_probs = torch.stack(
+                [mvn.log_prob(x) for mvn in self.prior_gmm_torch], dim=1
+            )  # [batch, n_components]
+
+            log_weights = torch.tensor(self.log_weights, device=x.device)
+            log_responsibilities = log_probs + log_weights
+
+            # normalize responsibilities
+            max_log = log_responsibilities.max(dim=1, keepdim=True).values
+            responsibilities = torch.exp(log_responsibilities - max_log)
+            responsibilities /= responsibilities.sum(dim=1, keepdim=True)
+
+            # sample component index for each sample
+            component_choices = torch.multinomial(responsibilities, num_samples=1).squeeze(1)
+
+            # apply affine transforms: x @ A[i]^T + B[i]
+            A = torch.stack(self.A).to(x.device)  # [n_components, D, D]
+            B = torch.stack(self.B).to(x.device)  # [n_components, D]
+
+            # compute all transformed versions
+            x_all = torch.einsum('bd,ked->bke', x, A) + B  # [batch, n_components, D]
+
+            # select according to sampled components
+            x_transformed = x_all[torch.arange(x.size(0)), component_choices]
+
+            return self.clip_to_box(x_transformed)
 
     def forward_probabilistic(self ,x) -> list[multivariate_normal_gen]:
         # Compute responsibilities
