@@ -157,10 +157,12 @@ class FullAffine(BaseTransform):
         solver_instance = pyo.SolverFactory(solver)
         if solver == "gurobi":
             solver_instance.options['NonConvex'] = 2
-            solver_instance.options["Presolve"] = 0
-            solver_instance.options['PreQLinearize'] = 2
-            solver_instance.options['MIPFocus'] = 1
-        res = solver_instance.solve(m)
+            solver_instance.options['TimeLimit'] = 4500
+            solver_instance.options['NoRelHeurTime'] = 900
+        try:
+            res = solver_instance.solve(m)
+        except ValueError as e:
+            return None
 
         if res.solver.termination_condition != pyo.TerminationCondition.optimal:
             print("Warning: Pyomo did not converge to optimal solution")
@@ -556,7 +558,12 @@ class DirectOptimization(BaseTransform):
         solver_instance = pyo.SolverFactory(solver)
         if solver == "gurobi":
             solver_instance.options['NonConvex'] = 2
-        result = solver_instance.solve(model)
+            solver_instance.options['TimeLimit'] = 4500
+            solver_instance.options['NoRelHeurTime'] = 900
+        try :
+            result = solver_instance.solve(model)
+        except ValueError as e:
+            return None
 
         # Extract solution
         Z_opt = np.array([[pyo.value(model.Z[i, j]) for j in range(d)] for i in range(n)])

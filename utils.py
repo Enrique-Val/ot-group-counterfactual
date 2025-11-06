@@ -242,6 +242,9 @@ def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.
         t0 = time.time()
         pv = transform.pyomo_solving(X_sub_train, f , y_prime=y_prime, y_prime_confidence=y_prime_confidence, K=K, solver=solver)
         tn = time.time()
+        if pv is None:
+            print("No solution found (Pyomo)")
+            return None, None, tn - t0
 
     wass_test = None
     if X_sub_test is not None:
@@ -271,7 +274,8 @@ def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confid
 
         wass, wass_test, time = direct_experiment(transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, K, solver,
                                        device)
-
+        if wass is None:
+            continue
         wass_list.append(wass)
         wass_test_list.append(wass_test)
         time_list.append(time)
@@ -283,7 +287,7 @@ def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : 
     X_prime, res_f, res_x = solver.solve(transform, f, X_sub_train, y_prime=y_prime,
                                          y_prime_confidence = y_prime_confidence, seed=random_seed)
     tn = time.time()
-    print("Solver time:", tn - t0)
+    print("Solver time CV it:", tn - t0)
 
     if res_f is not None:
         # Order solutions by f2 values
