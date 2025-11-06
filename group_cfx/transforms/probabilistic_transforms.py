@@ -76,6 +76,7 @@ class GMMForwardTransform(ProbabilisticTransform) :
         self.prior_gmm = []
         self.prior_sqrt_cov = []
         self.prior_inv_sqrt_cov = []
+        self.log_weights = []
         for i in range(self.n_components):
             mvn = multivariate_normal(mean=gmm.means_[i], cov=gmm.covariances_[i])
             self.prior_gmm.append(mvn)
