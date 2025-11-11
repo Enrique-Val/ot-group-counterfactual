@@ -184,17 +184,7 @@ if __name__ == "__main__":
         # Step 5: Solve and analyse
         # ============================
         for i, X_sub in enumerate(X_sub_list):
-            else:
-                raise ValueError("Unknown transform")
-
-            if isinstance(transform, ProbabilisticTransform):
-                transform.fit_prior(X_sub)
-            transform.to(device)
-
-            if args.math_opt and args.transform not in ['FullAffine', 'PSDAffine', 'DiagonalAffine',
-                                                      'GaussianCommutativeTransform', 'GaussianScaleTransform',
-                                                      'DirectOptimization', 'GaussianTransform', 'GMMForwardTransform']:
-                raise ValueError("Linear solver cannot be used with transform " + args.transform)
+            transform = get_transform(args.transform, X_sub, xl = xl, xu=xu, device = "cpu")
 
             if args.math_opt :
                 solver = cv.MOSEK if not args.transform in ["DirectOptimization","FullAffine"] else "gurobi"
@@ -225,7 +215,8 @@ if __name__ == "__main__":
                 elif solver_name == "pymoo":
                     # Example with NSGA2
                     solver = PyMooSolver(
-                        algorithm=NSGA2(pop_size=100, eliminate_duplicates=True, verbose =args.verbose),
+                        algorithm=NSGA2(pop_size=100, eliminate_duplicates=True, verbose =args.verbose,
+                                        seed=args.random_seed),
                         termination=DefaultMultiObjectiveTermination(),
                         verbose=args.verbose,
                         min_acc=y_prime_conf
