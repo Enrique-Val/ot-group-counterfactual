@@ -12,7 +12,7 @@ from pymoo.termination.default import DefaultMultiObjectiveTermination
 
 from group_cfx.solver.pymoo_solver import PyMooSolver
 from utils import synthetic_2d, get_openml_dataset, train_lg, \
-    cross_experiment, cross_experiment_pymoo, get_transform
+    cross_experiment, cross_experiment_pymoo, get_transform, get_groups
 
 from sklearn_extra.cluster import KMedoids
 
@@ -167,7 +167,6 @@ if __name__ == "__main__":
         # Confidence for y_prime
         y_prime_conf = 0.8
 
-        print_mem(prefix=f"After clustering")
 
         # ============================
         # Step 5: Solve and analyse
@@ -190,6 +189,7 @@ if __name__ == "__main__":
                     else :
                         wass_test_list.append(wass_test)
                     time_list.append(exec_time)
+                    print("Exec time label", y_orig, "cluster", i, "K", K, ":", exec_time, "seconds")
                 # Create df and save to csv
                 df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'Wasserstein test': wass_test_list, 'Time': time_list})
                 df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
