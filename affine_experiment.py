@@ -119,8 +119,6 @@ if __name__ == "__main__":
 
     unique_labels = np.unique(y)
 
-    n_cluster = args.n_clusters
-
     cluster_alg_dir_list = []
 
     for y_orig in unique_labels:
@@ -128,8 +126,6 @@ if __name__ == "__main__":
         cluster_alg_dir = os.path.join(cluster_path, "label_" + str(y_orig) + ".pkl")
         cluster_alg_dir_list.append(cluster_alg_dir)
         if not os.path.exists(cluster_alg_dir) and not args.only_train :
-            y_prime = unique_labels[unique_labels != y_orig][0]
-
             # Alternative: Find interesting groups to explain by applying clustering
             sub_data = X_test[y_test == y_orig]
 
@@ -142,7 +138,7 @@ if __name__ == "__main__":
                 cluster_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
                 cluster_alg.fit(sub_data)
             # Save the cluster algorithm, pickling it
-            joblib.dump(f, cluster_alg_dir)
+            joblib.dump(cluster_alg, cluster_alg_dir)
 
     if args.only_train :
         print("Only training the classifiers. Exiting.")
@@ -150,7 +146,7 @@ if __name__ == "__main__":
 
     # Dataframe for the exec time (only if non linear, pyomo)
     if not args.math_opt :
-        df_index = pd.MultiIndex.from_product([unique_labels, range(n_cluster)], names=['label', 'cluster'])
+        df_index = pd.MultiIndex.from_product([unique_labels, range(args.n_clusters)], names=['label', 'cluster'])
         df_time = pd.Series(index = df_index, name='exec_time')
 
     for y_orig,cluster_alg_dir in zip(unique_labels, cluster_alg_dir_list):
