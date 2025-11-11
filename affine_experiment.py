@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     else :
         # Train a logistic regression model
-        scoring = "f1_macro"
+        scoring = "neg_log_loss"
         f, params, score = train_lg(X, y, scoring=scoring, random_state=args.random_seed, max_iter = 10000)
 
         # Pickle model to file
@@ -120,8 +120,9 @@ if __name__ == "__main__":
 
         # Save the training results (param and score) to a text file
         with open(os.path.join(models_path, "lg_params.txt"), "w") as file :
-            file.write(f"Best validation {scoring}: {score}\n")
-            file.write(f"Best parameters: {params}\n")
+            file.write(f"{params}\n")
+        with open(os.path.join(models_path, "lg_"+str(scoring)+".txt"), "w") as file :
+            file.write(f"{score}\n")
 
     if args.only_train :
         print("Only training the classifiers. Exiting.")

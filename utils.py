@@ -1,3 +1,4 @@
+import os
 import time
 
 import numpy as np
@@ -6,7 +7,7 @@ import torch
 from matplotlib import pyplot as plt
 from scipy.stats import uniform, norm
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, cross_val_score
 from torch import nn, optim
 from torch.utils.data import DataLoader, TensorDataset
 import openml as oml
@@ -112,35 +113,30 @@ def train_gbt(X, y, random_state):
     print("GBT classifier accuracy:", gbt_cv.best_score_)
     return gbt_cv.best_estimator_
 
-def train_lg(X, y, scoring = "accuracy", random_state = 0, max_iter = 100):
+def train_lg(X, y, scoring = "logloss", random_state = 0, max_iter = 100, n_folds = 10):
+    # Train Logistic Regression using CV for validation
+    # Since C = 1/lambda and the L2 regularization term in sklearn is 1/2 * lambda * ||w||^2, we have C = 1/(2lambda)
     param_grid = {
-        'C': np.logspace(-3, 3, 20),
-        'penalty': ['l1', 'l2'],
-        'solver': ['saga', 'liblinear'],
+        'C': 1/(2*np.logspace(-3, 2, 10)),
     }
 
-    grid = GridSearchCV(LogisticRegression(random_state = random_state, max_iter = max_iter), param_grid, cv=10,
+    grid = GridSearchCV(LogisticRegression(random_state = random_state, max_iter = max_iter), param_grid, cv=n_folds,
                         scoring= scoring, n_jobs=10)
     grid.fit(X, y)
 
-    # Train another grid with elasticnet penalty
-    param_grid = {
-        'C': np.logspace(-3, 3, 20),
-        'penalty': ['elasticnet'],
-        'solver': ['saga'],
-        'l1_ratio': [0.1, 0.3, 0.5, 0.7, 0.9]
-    }
+    # Train another model with no penalty. No grid search, just obtain the CV score
+    lr = LogisticRegression(random_state=random_state, max_iter=max_iter, penalty=None)
+    score_none_pen = np.mean(cross_val_score(lr, X, y, cv=n_folds, scoring=scoring))
+    lr.fit(X, y)
 
-    grid_en = GridSearchCV(LogisticRegression(random_state = random_state, max_iter = max_iter), param_grid, cv=10,
-                           scoring= scoring, n_jobs=10)
     grid_en.fit(X, y)
 
-    if grid_en.best_score_ > grid.best_score_:
-        grid = grid_en
+    if score_none_pen > grid.best_score_:
+        print("LG classifier " + scoring + ":", grid.best_score_)
 
     print("LG classifier " + scoring+":" , grid.best_score_)
+    # Retrieve lambda from C
 
-    return grid.best_estimator_, grid.best_params_, grid.best_score_
 
 def print_plot_solutions(res_f, res_x, transform, X_sub, X_sub_test = None, n_pics = 4, x_lims = (None,None), y_lims = (None,None),
                          fets=(0,1), exec_time=None) :
