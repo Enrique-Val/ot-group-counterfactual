@@ -56,7 +56,8 @@ if __name__ == "__main__":
     # Create output directory if it does not exist
     data_path = os.path.join(args.output_dir, f"data_{args.data_id}")
     models_path = os.path.join(data_path, "models")
-    transform_path = os.path.join(data_path,str(args.n_clusters), "math_opt" if args.math_opt else "heuristic", args.transform)
+    cluster_path = os.path.join(data_path,str(args.n_clusters))
+    transform_path = os.path.join(cluster_path, "math_opt" if args.math_opt else "heuristic", args.transform)
     if not os.path.exists(transform_path):
         os.makedirs(transform_path)
     if not os.path.exists(models_path):
@@ -171,15 +172,25 @@ if __name__ == "__main__":
         df_discarded = sub_data[probs >= 1 - conf_selection]
         sub_data = sub_data[probs < 1 - conf_selection]'''
 
-        # Use kmeans clustering (sklearn)
-        # If there are more than 20k instances, train only with the first 20k and predict the rest
-        if sub_data.shape[0] > 20000:
-            kmeans_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
-            kmeans_alg.fit(sub_data[:20000])
-            cluster_labels = kmeans_alg.predict(sub_data)
-        else:
-            cluster_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
-            cluster_labels = cluster_alg.fit_predict(sub_data)
+        # Check if the clustering algorithm is saved
+        cluster_alg_dir = os.path.join(cluster_path, "label_"+str(y_orig)+".pkl")
+        if not os.path.exists(cluster_alg_dir) :
+            # Use kmeans clustering (sklearn)
+            # If there are more than 20k instances, train only with the first 20k and predict the rest
+            if sub_data.shape[0] > 20000:
+                cluster_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
+                cluster_alg.fit(sub_data[:20000])
+            else:
+                cluster_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
+                cluster_alg.fit(sub_data)
+            # Save the cluster algorithm, pickling it
+            joblib.dump(f, cluster_alg_dir)
+
+        else :
+            cluster_alg = joblib.load(cluster_alg_dir)
+
+        # Label instances
+        cluster_labels = cluster_alg.predict(sub_data)
 
         # Get "sub" datasets for each cluster
         X_sub_list = []
