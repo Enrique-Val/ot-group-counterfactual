@@ -13,7 +13,10 @@ from torch.utils.data import DataLoader, TensorDataset
 import openml as oml
 from sklearn.ensemble import GradientBoostingClassifier
 
-from group_cfx.transforms.functional_transforms import DirectOptimization
+from group_cfx.transforms.functional_transforms import DirectOptimization, FullAffine, PSDAffine, DiagonalAffine
+from group_cfx.transforms.gaussian_transforms import GaussianCommutativeTransform, GaussianTransform, \
+    GaussianScaleTransform
+from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform
 from group_cfx.transforms.utils import bi_lipschitz_metric
 
 
@@ -129,14 +132,16 @@ def train_lg(X, y, scoring = "logloss", random_state = 0, max_iter = 100, n_fold
     score_none_pen = np.mean(cross_val_score(lr, X, y, cv=n_folds, scoring=scoring))
     lr.fit(X, y)
 
-    grid_en.fit(X, y)
 
     if score_none_pen > grid.best_score_:
         print("LG classifier " + scoring + ":", grid.best_score_)
+        return lr, {'lambda' : 0}, score_none_pen
 
     print("LG classifier " + scoring+":" , grid.best_score_)
     # Retrieve lambda from C
+    best_lambda = 1 / (2*grid.best_params_['C'])
 
+    return grid.best_estimator_, {"lambda" : best_lambda}, grid.best_score_
 
 def print_plot_solutions(res_f, res_x, transform, X_sub, X_sub_test = None, n_pics = 4, x_lims = (None,None), y_lims = (None,None),
                          fets=(0,1), exec_time=None) :
@@ -230,6 +235,10 @@ def print_plot_solutions(res_f, res_x, transform, X_sub, X_sub_test = None, n_pi
     fig2.show()
 
 def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.Tensor, f, y_prime, y_prime_confidence, K, solver, device = "cpu"):
+    if isinstance(transform, ProbabilisticTransform):
+        transform.fit_prior(X_sub_train)
+    transform.to(device)
+
     if transform.is_cvx() :
         t0 = time.time()
         pv = transform.cvxpy_solving(X_sub_train, f, y_prime=y_prime, y_prime_confidence=y_prime_confidence, K=K, solver=solver)
@@ -279,6 +288,10 @@ def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confid
 
 def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : torch.Tensor, f, y_prime,
                             y_prime_confidence, solver, device = "cpu", random_seed = 0):
+    if isinstance(transform, ProbabilisticTransform):
+        transform.fit_prior(X_sub_train)
+    transform.to(device)
+
     t0 = time.time()
     X_prime, res_f, res_x = solver.solve(transform, f, X_sub_train, y_prime=y_prime,
                                          y_prime_confidence = y_prime_confidence, seed=random_seed)
@@ -358,4 +371,37 @@ def cross_experiment_pymoo(transform, X_sub : torch.Tensor, f, y_prime, y_prime_
         df_list.append(df)
         time_list.append(time)
     return pd.concat(df_list), np.mean(time_list)
+
+def get_transform(transform_str,X_sub, xl = None, xu = None, device ="cpu") :
+    d = X_sub.shape[1]
+    if xl is None or xu is None:
+        xl = X_sub.min()
+        xu = X_sub.max()
+
+    if transform_str == 'FullAffine':
+        transform = FullAffine(d, blp_proxy=False)
+    elif transform_str == 'FullAffine_proxy':
+        transform = FullAffine(d, blp_proxy=True)
+    elif transform_str == 'PSDAffine':
+        transform = PSDAffine(d, blp_proxy=False)
+    elif transform_str == 'PSDAffine_proxy':
+        transform = PSDAffine(d, blp_proxy=True)
+    elif transform_str == 'DiagonalAffine':
+        transform = DiagonalAffine(d)
+    elif transform_str == 'DirectOptimization':
+        transform = DirectOptimization(X_sub, xl, xu)
+    elif transform_str == 'GaussianCommutativeTransform':
+        transform = GaussianCommutativeTransform(d)
+    elif transform_str == 'GaussianTransform':
+        transform = GaussianTransform(d)
+    elif transform_str == 'GaussianTransform_proxy':
+        transform = GaussianTransform(d, blp_proxy=True)
+    elif transform_str == 'GaussianScaleTransform':
+        transform = GaussianScaleTransform(d)
+    elif transform_str == 'GMMForwardTransform':
+        transform = GMMForwardTransform(d, n_components=3)
+    else:
+        raise ValueError("Unknown transform")
+
+    return transform
 

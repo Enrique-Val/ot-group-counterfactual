@@ -6,20 +6,13 @@ import pandas as pd
 import sklearn
 from pymoo.algorithms.moo.nsga2 import NSGA2
 import torch
-import matplotlib.pyplot as plt
 import os
 
 from pymoo.termination.default import DefaultMultiObjectiveTermination
-from sklearn.cluster import KMeans
 
 from group_cfx.solver.pymoo_solver import PyMooSolver
-from group_cfx.transforms.functional_transforms import FullAffine, DirectOptimization, \
-    DiagonalAffine, PSDAffine
-from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform
-from group_cfx.transforms.gaussian_transforms import GaussianTransform, GaussianCommutativeTransform, \
-    GaussianScaleTransform
 from utils import synthetic_2d, get_openml_dataset, train_lg, \
-    cross_experiment, cross_experiment_pymoo
+    cross_experiment, cross_experiment_pymoo, get_transform
 
 from sklearn_extra.cluster import KMedoids
 
@@ -185,34 +178,12 @@ if __name__ == "__main__":
         # Confidence for y_prime
         y_prime_conf = 0.8
 
+        print_mem(prefix=f"After clustering")
 
         # ============================
         # Step 5: Solve and analyse
         # ============================
         for i, X_sub in enumerate(X_sub_list):
-            transform = None
-            if args.transform == 'FullAffine':
-                transform = FullAffine(d, blp_proxy= False)
-            elif args.transform == 'FullAffine_proxy':
-                transform = FullAffine(d, blp_proxy= True)
-            elif args.transform == 'PSDAffine':
-                transform = PSDAffine(d, blp_proxy= False)
-            elif args.transform == 'PSDAffine_proxy':
-                transform = PSDAffine(d, blp_proxy= True)
-            elif args.transform == 'DiagonalAffine':
-                transform = DiagonalAffine(d)
-            elif args.transform == 'DirectOptimization':
-                transform = DirectOptimization(X_sub, xl, xu)
-            elif args.transform == 'GaussianCommutativeTransform':
-                transform = GaussianCommutativeTransform(d)
-            elif args.transform == 'GaussianTransform':
-                transform = GaussianTransform(d)
-            elif args.transform == 'GaussianTransform_proxy':
-                transform = GaussianTransform(d, blp_proxy= True)
-            elif args.transform == 'GaussianScaleTransform':
-                transform = GaussianScaleTransform(d)
-            elif args.transform == 'GMMForwardTransform':
-                transform = GMMForwardTransform(d, n_components=3)
             else:
                 raise ValueError("Unknown transform")
 
