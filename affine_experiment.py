@@ -94,16 +94,6 @@ if __name__ == "__main__":
     # ============================
 
     device = "cpu"
-    fet1 = 0
-    fet2 = 1
-
-    '''
-    f = train_gbt(X, y, random_state = args.random_seed)
-    # Select two most important features according to GBT feature importance
-    important_features = np.argsort(f.feature_importances_)[-2:]
-    fet1 = important_features[-1]
-    fet2 = important_features[-2]
-    '''
 
     # Load model if it exists
     if os.path.exists(os.path.join(models_path, "lg.pkl")) and not args.only_train:
@@ -155,22 +145,6 @@ if __name__ == "__main__":
 
         # Alternative: Find interesting groups to explain by applying clustering
         sub_data = X_test[y_test == label]
-
-        '''
-        # Remove also instances that are very close to the decision boundary
-        if isinstance(f, torch.nn.Module):
-            with torch.no_grad():
-                logits = f(torch.tensor(sub_data, dtype=torch.float32))
-                probs = torch.softmax(logits, dim=1)[:, 1].numpy()
-        else:
-            probs = f.predict_proba(sub_data)[:, 1]
-
-        # Save the discarded instances for reference
-        conf_selection = 0.5
-        if y_prime == 0:
-            probs = 1 - probs
-        df_discarded = sub_data[probs >= 1 - conf_selection]
-        sub_data = sub_data[probs < 1 - conf_selection]'''
 
         # Check if the clustering algorithm is saved
         cluster_alg_dir = os.path.join(cluster_path, "label_"+str(y_orig)+".pkl")
