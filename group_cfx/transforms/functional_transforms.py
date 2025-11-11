@@ -558,8 +558,9 @@ class DirectOptimization(BaseTransform):
         solver_instance = pyo.SolverFactory(solver)
         if solver == "gurobi":
             solver_instance.options['NonConvex'] = 2
-            solver_instance.options['TimeLimit'] = 4500
-            solver_instance.options['NoRelHeurTime'] = 900
+            solver_instance.options['TimeLimit'] = 2000
+            solver_instance.options['NoRelHeurTime'] = 300
+            solver_instance.options['MIPFocus'] = 1
         try :
             result = solver_instance.solve(model)
         except ValueError as e:
