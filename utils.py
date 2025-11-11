@@ -405,3 +405,24 @@ def get_transform(transform_str,X_sub, xl = None, xu = None, device ="cpu") :
 
     return transform
 
+def get_groups(data, cluster_alg, device="cpu") :
+    # Label instances
+    cluster_labels = cluster_alg.predict(data)
+    # Get "sub" datasets for each cluster
+    X_sub_list = []
+    for c in np.unique(cluster_labels):
+        X_sub = data[cluster_labels == c]
+        # Limit to 200 instances for testing
+        X_sub = X_sub[:200]
+        print(X_sub.shape)
+        min_samples = 20
+        if X_sub.shape[0] < min_samples:
+            # Warn the user and introduce synthetic samples by jittering up to min_samples
+            print(
+                f"Warning: Cluster {c} has less than 20 samples ({X_sub.shape[0]} samples). Augmenting data by jittering.")
+            n_needed = min_samples - X_sub.shape[0]
+            noise = np.random.normal(0, 0.01, size=(n_needed, X_sub.shape[1]))
+            jittered_samples = X_sub[np.random.choice(X_sub.shape[0], n_needed, replace=True)] + noise
+            X_sub = np.vstack([X_sub, jittered_samples])
+            X_sub_list.append(torch.tensor(X_sub, dtype=torch.float32, device=device))
+    return X_sub_list

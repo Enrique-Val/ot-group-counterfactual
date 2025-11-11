@@ -108,10 +108,6 @@ if __name__ == "__main__":
         with open(os.path.join(models_path, "lg_"+str(scoring)+".txt"), "w") as file :
             file.write(f"{score}\n")
 
-    if args.only_train :
-        print("Only training the classifiers. Exiting.")
-        exit(0)
-
     # Compute max and mins per feature
     xl = np.min(X)
     xu = np.max(X)
@@ -125,23 +121,18 @@ if __name__ == "__main__":
 
     n_cluster = args.n_clusters
 
+    cluster_alg_dir_list = []
 
-    # Dataframe for the exec time (only if non linear, pyomo)
-    if not args.math_opt :
-        df_index = pd.MultiIndex.from_product([unique_labels, range(n_cluster)], names=['label', 'cluster'])
-        df_time = pd.Series(index = df_index, name='exec_time')
-
-    for label in unique_labels:
-        y_orig = label
-        y_prime = unique_labels[unique_labels != label][0]
-        print("Y_orig =", y_orig, "y_prime =", y_prime)
-
-        # Alternative: Find interesting groups to explain by applying clustering
-        sub_data = X_test[y_test == label]
-
+    for y_orig in unique_labels:
         # Check if the clustering algorithm is saved
-        cluster_alg_dir = os.path.join(cluster_path, "label_"+str(y_orig)+".pkl")
-        if not os.path.exists(cluster_alg_dir) :
+        cluster_alg_dir = os.path.join(cluster_path, "label_" + str(y_orig) + ".pkl")
+        cluster_alg_dir_list.append(cluster_alg_dir)
+        if not os.path.exists(cluster_alg_dir) and not args.only_train :
+            y_prime = unique_labels[unique_labels != y_orig][0]
+
+            # Alternative: Find interesting groups to explain by applying clustering
+            sub_data = X_test[y_test == y_orig]
+
             # Use kmeans clustering (sklearn)
             # If there are more than 20k instances, train only with the first 20k and predict the rest
             if sub_data.shape[0] > 20000:
@@ -153,27 +144,25 @@ if __name__ == "__main__":
             # Save the cluster algorithm, pickling it
             joblib.dump(f, cluster_alg_dir)
 
-        else :
-            cluster_alg = joblib.load(cluster_alg_dir)
+    if args.only_train :
+        print("Only training the classifiers. Exiting.")
+        exit(0)
 
+    # Dataframe for the exec time (only if non linear, pyomo)
+    if not args.math_opt :
+        df_index = pd.MultiIndex.from_product([unique_labels, range(n_cluster)], names=['label', 'cluster'])
+        df_time = pd.Series(index = df_index, name='exec_time')
+
+    for y_orig,cluster_alg_dir in zip(unique_labels, cluster_alg_dir_list):
+        # Load clustering algorithm
+        cluster_alg = joblib.load(cluster_alg_dir)
+
+        y_prime = unique_labels[unique_labels != y_orig][0]
+        seggregated_data = X_test[y_test == y_orig]
         # Label instances
-        cluster_labels = cluster_alg.predict(sub_data)
-
+        cluster_labels = cluster_alg.predict(seggregated_data)
         # Get "sub" datasets for each cluster
-        X_sub_list = []
-        for c in np.unique(cluster_labels):
-            X_c = sub_data[cluster_labels == c]
-            # Limit to 200 instances for testing
-            X_c = X_c[:200]
-            print(X_c.shape)
-            min_samples = 20
-            if X_c.shape[0] < min_samples:
-                # Warn the user and introduce synthetic samples by jittering up to min_samples
-                print(f"Warning: Cluster {c} has less than 20 samples ({X_c.shape[0]} samples). Augmenting data by jittering.")
-                n_needed = min_samples - X_c.shape[0]
-                jittered_samples = X_c[np.random.choice(X_c.shape[0], n_needed, replace=True)] + np.random.normal(0, 0.01, size=(n_needed, X_c.shape[1]))
-                X_c = np.vstack([X_c, jittered_samples])
-            X_sub_list.append(torch.tensor(X_c, dtype=torch.float32))
+        X_groups_list = get_groups(seggregated_data, cluster_alg)
 
         # Confidence for y_prime
         y_prime_conf = 0.8
@@ -183,7 +172,7 @@ if __name__ == "__main__":
         # ============================
         # Step 5: Solve and analyse
         # ============================
-        for i, X_sub in enumerate(X_sub_list):
+        for i, X_sub in enumerate(X_groups_list):
             transform = get_transform(args.transform, X_sub, xl = xl, xu=xu, device = "cpu")
 
             if args.math_opt :

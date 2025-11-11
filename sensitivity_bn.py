@@ -127,19 +127,19 @@ if __name__ == "__main__":
 
     n_cluster = args.n_clusters
     y_orig = 0
-    y_prime = unique_labels[unique_labels != y_orig][0]
     cluster_id = 0
     cluster_alg_dir = os.path.join(cluster_path, "label_"+str(y_orig)+".pkl")
 
 
-    print("Y_orig =", y_orig, "y_prime =", y_prime)
-
-    # Alternative: Find interesting groups to explain by applying clustering
-    sub_data = X_test[y_test == y_orig]
 
     if not os.path.exists(cluster_alg_dir):
         raise ValueError("No clustering algorithm found")
     cluster_alg = joblib.load(cluster_alg_dir)
+
+    y_prime = unique_labels[unique_labels != y_orig][0]
+    print("Y_orig =", y_orig, "y_prime =", y_prime)
+
+    sub_data = X_test[y_test == y_orig]
     cluster_labels = cluster_alg.predict(sub_data)
 
     X_sub = sub_data[cluster_labels == cluster_id]
