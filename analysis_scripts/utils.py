@@ -106,7 +106,7 @@ def friedman_posthoc(data, correct="bergmann", eps = 1e-5) -> dict[str, pd.DataF
 renaming = {"DiagonalAffine" : "Diag. \n affine", "GaussianCommutativeTransform" : "Comm. \n Gaussian",
                 "GaussianTransform" : "Any \n Gaussian", "PSDAffine" : "PSD \n affine", "GMMForwardTransform" : "3-GMM",
                 "DirectOptimization" : "Baseline", "FullAffine" : "Any \n affine",
-             "GaussianScaledTransform" : "Scaled \n Gaussian"}
+             "GaussianScaleTransform" : "Scaled \n Gaussian"}
 
 plot_order = ["Baseline", "Any \n affine", "PSD \n affine", "Diag. \n affine", "Any \n Gaussian", "Comm. \n Gaussian", "Scaled \n Gaussian" , "3-GMM"]
 

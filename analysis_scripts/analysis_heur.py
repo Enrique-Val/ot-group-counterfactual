@@ -1,6 +1,5 @@
 import itertools
 import os
-import re
 
 import numpy as np
 import pandas as pd
@@ -8,11 +7,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from results.utils import list_params, load_results, friedman_posthoc, palette, renaming, plot_order, fig_size
+from analysis_scripts.utils import list_params, load_results, friedman_posthoc, palette, renaming, plot_order, fig_size
 
 import scikit_posthocs as sp
 
-root_dir = "../results/"
+root_dir = "../results_grid/"
+n_clusters = 10
 
 def remove_self_dominated(df1, df2, wass_str, lip_str):
     pareto_mask = []
@@ -36,11 +36,11 @@ if __name__ == "__main__":
         os.makedirs(plots_dir)
 
 
-    datasets, transforms, label_clusters = list_params(root_dir, n_clusters=5, exp_type="heuristic")
+    datasets, transforms, label_clusters = list_params(root_dir, n_clusters=n_clusters, exp_type="heuristic")
     print(datasets)
     print(transforms)
     print(label_clusters)
-    results_crude = load_results(root_dir, datasets, transforms, label_clusters, exp_type='heuristic')
+    results_crude = load_results(root_dir, datasets, transforms, label_clusters, exp_type='heuristic', n_clusters=n_clusters)
     #transforms = transforms[:2]
     #label_clusters = label_clusters[:2]
 
@@ -152,6 +152,10 @@ if __name__ == "__main__":
                     df[metrics[0]] = np.mean(min_wass)
                     df[metrics[1]] = np.mean(min_lip)
                     df[metrics[2]] = np.mean(dp)
+                else :
+                    df[metrics[0]] = np.inf
+                    df[metrics[1]] = np.inf
+                    df[metrics[2]] = 1
                 results[dataset][transform][label_cluster_i] = df
 
             # Iterate and put into a single df for further analysis if needed
@@ -175,7 +179,7 @@ if __name__ == "__main__":
     df_joint_train = pd.read_csv(summary_file_train)
     df_joint_test = pd.read_csv(summary_file_test)
 
-    # Normalize with min wasserstein and min lipschitz of DirectOptimization per dataset and label_cluster
+    # Normalize min wasserstein of DirectOptimization per dataset and label_cluster
     for df_joint, str_i in zip([df_joint_train, df_joint_test], ["", " test"]):
         wass_str = "Min Wasserstein" + str_i
         for dataset, label_cluster_i in itertools.product(datasets, label_clusters):
@@ -191,8 +195,8 @@ if __name__ == "__main__":
 
 
     # Drop rows with NaN values
-    df_joint_train = df_joint_train.dropna().reset_index(drop=True)
-    df_joint_test = df_joint_test.dropna().reset_index(drop=True)
+    #df_joint_train = df_joint_train.dropna().reset_index(drop=True)
+    #df_joint_test = df_joint_test.dropna().reset_index(drop=True)
 
     # Rename transforms for better visualization
     df_joint_train["Transform"] = df_joint_train["Transform"].map(renaming)
@@ -201,6 +205,8 @@ if __name__ == "__main__":
     actual_transforms = [i for i in plot_order if i in df_joint_train["Transform"].unique()]
     #actual_transforms = plot_order
     n_transforms = len(actual_transforms)
+
+    print(df_joint_train.to_string())
 
     for df_joint,str_i in zip([df_joint_train, df_joint_test], ["", " test"]):
         #Boxplot, where each box is the transform. One plot per metric, aggregated over datasets and label_clusters
@@ -211,17 +217,27 @@ if __name__ == "__main__":
             ax = fig.gca()
             ax.grid(True)
             if "Wasserstein" in metric:
-
-                sns.boxplot(data=df_joint[df_joint["Transform"] != "DirectOptimization"], x="Transform", y=metric, hue="Transform",
+                ax.set_yscale("log")
+                # To plot
+                to_plot = df_joint[df_joint["Transform"] != "DirectOptimization"]
+                # Drop infinite values
+                to_plot = to_plot.replace([np.inf, -np.inf, 0], np.nan).dropna()
+                sns.boxplot(data=to_plot, x="Transform", y=metric, hue="Transform",
                             palette=palette, showfliers=False, ax=ax, order = actual_transforms[1:])
+            if "Domination percent" in metric:
+                to_plot = to_plot.replace([np.inf, -np.inf, 0], np.nan).dropna()
+                sns.barplot(data=to_plot, x="Transform", y=metric, hue="Transform",
+                            palette=palette, ax=ax, order=actual_transforms)
+
             else :
-                sns.boxplot(data=df_joint, x="Transform", y=metric, hue="Transform",
+                to_plot = to_plot.replace([np.inf, -np.inf], np.nan).dropna()
+                sns.boxplot(data=to_plot, x="Transform", y=metric, hue="Transform",
                             palette=palette, showfliers=False, ax = ax, order = actual_transforms)
             sns.despine()
             ax.set_xlabel("")
             ax.set_ylabel("")
             # Remove legend
-            ax.legend_.remove()
+            #ax.legend_.remove()
             # Save plot
             output_file = os.path.join(plots_dir, f"boxplot_{metric.replace(' ', '_')}{str_i}.pdf")
             fig.savefig(output_file, bbox_inches='tight')
@@ -244,6 +260,14 @@ if __name__ == "__main__":
                     "Run time": [exec_time]
                 })], ignore_index=True)
 
+    # Normalize times per dataset by the DirectOptimization time
+    # First obtain separately the DirectOptimization times
+    df_time_do = df_time[df_time["Transform"] == "DirectOptimization"]
+    for dataset, label_cluster_i in itertools.product(datasets, df_time_do["Label_Cluster"].unique()):
+        mask = (df_time["Dataset"] == dataset) & (df_time["Label_Cluster"] == label_cluster_i)
+        do_time = df_time_do[(df_time_do["Dataset"] == dataset) & (df_time_do["Label_Cluster"] == label_cluster_i)]["Run time"].values[0]
+        df_time.loc[mask, "Run time"] = df_time.loc[mask, "Run time"] / do_time
+
     # Rename transforms for better visualization
     df_time["Transform"] = df_time["Transform"].map(renaming)
 
@@ -252,13 +276,14 @@ if __name__ == "__main__":
     ax = fig.gca()
     ax.grid(True)
     sns.boxplot(data=df_time, x="Transform", y="Run time", hue="Transform",
-                palette=palette, showfliers=False, ax=ax, order=actual_transforms
+                palette=palette, showfliers=False, ax=ax, order=actual_transforms[1:]
                 )
     sns.despine()
     ax.set_xlabel("")
     ax.set_ylabel("")
+    ax.set_yscale("log")
     # Remove legend
-    ax.legend_.remove()
+    #ax.legend_.remove()
     # Save plot
     output_file = os.path.join(plots_dir, f"boxplot_heur_exec_time.pdf")
     fig.savefig(output_file, bbox_inches='tight')
@@ -271,7 +296,7 @@ if __name__ == "__main__":
         for metric in metrics:
             # Prepare data for Friedman test
             data = pd.DataFrame()
-            for transform in transforms:
+            for transform in actual_transforms:
                 subset = df_joint[df_joint["Transform"] == transform]
                 data[transform] = subset[metric].reset_index(drop=True)
             posthoc_results = friedman_posthoc(data, correct="bergmann")
@@ -289,38 +314,48 @@ if __name__ == "__main__":
             ax.set_title(f"Critical Difference Diagram for {metric}")
             fig.show()
 
-
+    # Count the number of infinite values per transform in the test set
+    print("Counting infinite values per transform in the test set")
+    for transform in actual_transforms :
+        inf_count = 0
+        total_count = 0
+        subset = df_joint_test[df_joint_test["Transform"] == transform]
+        inf_count = subset["Min Wasserstein test"].isna().sum()
+        total_count = len(subset["Min Wasserstein test"])
+        print(f"Transform {transform}: {inf_count} infinite values out of {total_count} ({inf_count/total_count*100:.2f}%)")
     raise ValueError("Stop here")
     # Iterate (within dataset -1) over all transforms and print the results for label_cluster 0,0
     dataset = datasets[1]
+    wass_str = "Wasserstein test"
+    lip_str = "Lipschitz test"
     for label_cluster_i in label_clusters:
         label, cluster = label_cluster_i
         to_plot = {}
         for transform in transforms:
             res = results_crude[dataset][transform][(label, cluster)]
-            res = res[["Wasserstein", "Lipschitz"]]
+            res = res[[wass_str, lip_str]]
             # Delete all dominated points (Pareto front)
-            if res is not None and len(res) > 0:
+            '''if res is not None and len(res) > 0:
                 pareto_mask = []
                 for i, row_i in res.iterrows():
                     dominated = False
                     for j, row_j in res.iterrows():
                         if i != j:
-                            if (row_j["Wasserstein"] <= row_i["Wasserstein"] and
-                                row_j["Lipschitz"] <= row_i["Lipschitz"] and
-                                (row_j["Wasserstein"] < row_i["Wasserstein"] or
-                                 row_j["Lipschitz"] < row_i["Lipschitz"])):
+                            if (row_j[wass_str] <= row_i[wass_str] and
+                                row_j[lip_str] <= row_i[lip_str] and
+                                (row_j[wass_str] < row_i[wass_str] or
+                                 row_j[lip_str] < row_i[lip_str])):
                                 dominated = True
                                 break
                     pareto_mask.append(not dominated)
-                res = res[pareto_mask]
+                res = res[pareto_mask]'''
             to_plot[transform] = res
 
         # Jointly plot all results
         plt.figure(figsize=(6, 4))
         for transform, res in to_plot.items():
             if res is not None:
-                sns.scatterplot(data=res, x="Wasserstein", y="Lipschitz", label=transform)
+                sns.scatterplot(data=res, x=wass_str, y=lip_str, label=transform)
         plt.xlabel("Wasserstein Distance")
         plt.ylabel("1-Lipschitz Metric")
         plt.title(f"Pareto Fronts for Dataset {dataset}, Label {label}, Cluster {cluster}")

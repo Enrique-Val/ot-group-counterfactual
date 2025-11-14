@@ -414,7 +414,7 @@ def get_groups(data, cluster_alg, device="cpu") :
         X_sub = data[cluster_labels == c]
         # Limit to 200 instances for testing
         X_sub = X_sub[:200]
-        print(X_sub.shape)
+        print("Found", X_sub.shape)
         min_samples = 20
         if X_sub.shape[0] < min_samples:
             # Warn the user and introduce synthetic samples by jittering up to min_samples

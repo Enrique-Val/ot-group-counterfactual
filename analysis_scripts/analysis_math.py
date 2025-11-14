@@ -1,5 +1,4 @@
 import os
-import re
 
 import numpy as np
 import pandas as pd
@@ -9,10 +8,10 @@ import scikit_posthocs as sp
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from results.utils import list_params, load_results, friedman_posthoc, palette, renaming, plot_order, fig_size
+from analysis_scripts.utils import list_params, load_results, friedman_posthoc, palette, renaming, plot_order, fig_size
 
-root_dir = "../results/"
-n_clusters = 5
+root_dir = "/"
+n_clusters = 10
 
 def run_friedman_by_K(all_df, correct="bergmann", palette = None):
     """
@@ -90,7 +89,7 @@ if __name__ == "__main__":
     print(datasets)
     print(transforms)
     print(label_clusters)
-    results = load_results(root_dir, datasets, transforms, label_clusters)
+    results = load_results(root_dir, datasets, transforms, label_clusters, n_clusters=n_clusters, exp_type="math_opt")
     # Iterate and set first column as index
     for dataset in datasets:
         for transform in transforms:
@@ -105,14 +104,14 @@ if __name__ == "__main__":
         for label_cluster_i in label_clusters:
             # Get DirectOptimization time
             direct_opt_df = results[dataset]["DirectOptimization"][label_cluster_i]
-            print(dataset, label_cluster_i)
-            direct_opt_time = direct_opt_df["exec_time"]
-            direct_opt_ws = direct_opt_df["Wasserstein"]
+            #print(dataset, label_cluster_i)
+            direct_opt_time = direct_opt_df["Time"]
+            direct_opt_ws = direct_opt_df["Wasserstein test"]
             for transform in transforms:
                 df = results[dataset][transform][label_cluster_i]
                 if df is not None and len(df) > 0:
-                    df["Wasserstein"] = df["Wasserstein"] / direct_opt_ws
-                    df["exec_time"] = df["exec_time"] / direct_opt_time
+                    df["Wasserstein test"] = df["Wasserstein test"] / direct_opt_ws
+                    df["Time"] = df["Time"] / direct_opt_time
                     results[dataset][transform][label_cluster_i] = df
 
     # Iterate (within dataset -1) over all transforms and print the results for label_cluster 0,0
@@ -149,8 +148,10 @@ if __name__ == "__main__":
     actual_plot_order = [i for i in plot_order if i in all_df_no_do["transform"].unique()]
     plot_order.remove(actual_plot_order[0])
 
+    print(palette)
+
     # make one boxplot per metric
-    for metric,metric_str in zip(all_df_no_do["metric"].unique(),["Norm. squared W2", "Run time"]):
+    for metric in all_df_no_do["metric"].unique():
         fig = plt.figure(figsize=fig_size)
         ax = fig.gca()
         ax.grid(True)
@@ -164,21 +165,21 @@ if __name__ == "__main__":
                     palette=palette,
                     order = actual_plot_order,
                     ax = ax)
+        # Log scale for time
+        ax.set_yscale("log")
         sns.despine()
         #ax.set_title(f"{metric}")
         n = len(subset[subset["transform"] == plot_order[0]])
         # Write the number of samples per box at the top of the plot
         ax.text(0.5, 1 * np.quantile(subset["value"],0.9), "n = " + str(n), horizontalalignment='center',
                       verticalalignment='center', fontsize=10)
-        fig.suptitle("")
-        ax.set_xlabel("Transform")
-        ax.set_ylabel(metric_str)
+        #ax.set_xlabel("Transform")
+        #ax.set_ylabel(metric_str)
         ax.set_xlabel("")
         ax.set_ylabel("")
-        fig.tight_layout()
         # Save plot
         plot_path = os.path.join(plots_dir, f"boxplot_{metric.replace(' ','_')}.pdf")
-        fig.savefig(plot_path)
+        fig.savefig(plot_path, bbox_inches="tight")
         fig.show()
 
     # make one boxplot per metric
@@ -195,6 +196,7 @@ if __name__ == "__main__":
                         order=actual_plot_order, ax = ax)
             sns.despine()
             n = len(subset[subset["transform"] == plot_order[0]])
+            ax.set_yscale("log")
             # Write the number of samples per box at the top of the plot
             ax.text(0.5, 0.05, "n = " + str(n), horizontalalignment='center',
                     verticalalignment='center', fontsize=10)

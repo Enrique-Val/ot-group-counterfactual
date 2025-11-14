@@ -125,7 +125,7 @@ if __name__ == "__main__":
         # Check if the clustering algorithm is saved
         cluster_alg_dir = os.path.join(cluster_path, "label_" + str(y_orig) + ".pkl")
         cluster_alg_dir_list.append(cluster_alg_dir)
-        if not os.path.exists(cluster_alg_dir) and not args.only_train :
+        if not os.path.exists(cluster_alg_dir) or args.only_train :
             # Alternative: Find interesting groups to explain by applying clustering
             sub_data = X_test[y_test == y_orig]
 
