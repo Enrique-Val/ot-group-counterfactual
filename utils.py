@@ -424,5 +424,5 @@ def get_groups(data, cluster_alg, device="cpu") :
             noise = np.random.normal(0, 0.01, size=(n_needed, X_sub.shape[1]))
             jittered_samples = X_sub[np.random.choice(X_sub.shape[0], n_needed, replace=True)] + noise
             X_sub = np.vstack([X_sub, jittered_samples])
-            X_sub_list.append(torch.tensor(X_sub, dtype=torch.float32, device=device))
+        X_sub_list.append(torch.tensor(X_sub, dtype=torch.float32, device=device))
     return X_sub_list
