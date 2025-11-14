@@ -80,6 +80,7 @@ class GMMForwardTransform(ProbabilisticTransform) :
         self.prior_sqrt_cov = []
         self.prior_inv_sqrt_cov = []
         self.log_weights = []
+        self.prior_gmm_torch = []
         for i in range(self.n_components):
             mvn = multivariate_normal(mean=gmm.means_[i], cov=gmm.covariances_[i])
             self.prior_gmm.append(mvn)
@@ -122,8 +123,8 @@ class GMMForwardTransform(ProbabilisticTransform) :
         for i in range(self.n_components):
             A_i_array = compute_A(self.prior_gmm[i].cov, self.posterior_gmm[i].cov, self.prior_sqrt_cov[i], self.prior_inv_sqrt_cov[i])
             with torch.no_grad():
-                A_i = torch.tensor(A_i_array)
-                B_i = torch.tensor((self.posterior_gmm[i].mean - self.prior_gmm[i].mean @ A_i_array.T))
+                A_i = torch.tensor(A_i_array, dtype =self.marginal_stds.dtype, device=self.marginal_stds.device)
+                B_i = torch.tensor(self.posterior_gmm[i].mean - self.prior_gmm[i].mean @ A_i_array.T, dtype=self.marginal_stds.dtype, device=self.marginal_stds.device)
             self.A.append(A_i)
             self.B.append(B_i)
 
@@ -160,32 +161,28 @@ class GMMForwardTransform(ProbabilisticTransform) :
     def forward_probabilistic(self ,x) -> list[multivariate_normal_gen]:
         # Compute responsibilities
         x_np = x.detach().cpu().numpy()
-        log_probs = np.array([mvn.logpdf(x_np) for mvn in self.prior_gmm]).T
-        log_weights = np.array(self.log_weights)
-        log_responsibilities = log_probs + log_weights
-        # Normalize to get responsibilities
-        max_log_responsibilities = log_responsibilities.max(axis=1, keepdims=True)
-        responsibilities = np.exp(log_responsibilities - max_log_responsibilities)
-        responsibilities /= responsibilities.sum(axis=1, keepdims=True)
-        # Build list of posterior distributions for each input point
-        posterior_list = []
-        for i in range(x_np.shape[0]):
-            # For each point, build a mixture of Gaussians with the posterior components weighted by responsibilities
-            means = []
-            covariances = []
-            weights = []
-            for j in range(self.n_components):
-                means.append(self.posterior_gmm[j].mean)
-                covariances.append(self.posterior_gmm[j].cov)
-                weights.append(responsibilities[i, j])
-            # Create a GaussianMixture object to represent the mixture
-            gmm_post = GaussianMixture(n_components=self.n_components, covariance_type='full')
-            gmm_post.means_ = np.array(means)
-            gmm_post.covariances_ = np.array(covariances)
-            gmm_post.weights_ = np.array(weights)
-            gmm_post.precisions_cholesky_ = np.array([np.linalg.cholesky(np.linalg.inv(cov)) for cov in covariances])
-            posterior_list.append(gmm_post)
-        return posterior_list
+        with torch.no_grad():
+            # log-probs for each component
+            log_probs = torch.stack(
+                [mvn.log_prob(x) for mvn in self.prior_gmm_torch], dim=1
+            )  # [batch, n_components]
+
+            log_weights = torch.tensor(self.log_weights, device=x.device)
+            log_responsibilities = log_probs + log_weights
+
+            # normalize responsibilities
+            max_log = log_responsibilities.max(dim=1, keepdim=True).values
+            responsibilities = torch.exp(log_responsibilities - max_log)
+            responsibilities /= responsibilities.sum(dim=1, keepdim=True)
+
+            # apply affine transforms: x @ A[i]^T + B[i]
+            A = torch.stack(self.A).to(x.device)  # [n_components, D, D]
+            B = torch.stack(self.B).to(x.device)  # [n_components, D]
+
+            # compute all transformed versions
+            x_all = torch.einsum('bd,ked->bke', x, A) + B  # [batch, n_components, D]
+
+            return x_all
 
     def wasserstein_projection_distance(self, X_orig = None):
         # Compute pairwise distances between all components
@@ -325,8 +322,8 @@ class GMMForwardTransform(ProbabilisticTransform) :
                 B_sol = mu1_sol - self.prior_gmm[j].mean @ A_sol.T
 
                 # Manually set affine transforms
-                self.A.append(torch.tensor(A_sol))
-                self.B.append(torch.tensor(B_sol))
+                self.A.append(torch.tensor(A_sol, dtype=self.marginal_stds.dtype, device=self.marginal_stds.device))
+                self.B.append(torch.tensor(B_sol, dtype=self.marginal_stds.dtype, device=self.marginal_stds.device))
 
                 # Update mean offset
                 new_mean_offset = mu1_sol - self.prior_gmm[j].mean
