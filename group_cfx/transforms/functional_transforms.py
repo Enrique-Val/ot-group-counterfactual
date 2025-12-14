@@ -469,7 +469,7 @@ class DirectOptimization(BaseTransform):
     A 'model' that directly optimizes X' (counterfactuals for each individual).
     Compatible with your other transforms.
     """
-    def __init__(self, X_init, xl, xu, box_clip=True):
+    def __init__(self, X_init, xl, xu, box_clip=True, bilipschitz = True):
         super().__init__()
         # store original subgroup (not a parameter)
         self.register_buffer("X_orig", X_init.clone())
@@ -478,6 +478,7 @@ class DirectOptimization(BaseTransform):
         self.box_clip = box_clip
         self.xl = xl
         self.xu = xu
+        self.bilipschitz = bilipschitz
 
     def forward(self, x=None):
         """
@@ -488,6 +489,10 @@ class DirectOptimization(BaseTransform):
             return self.clip_to_box(self.X_prime)
         else:
             return self.X_prime
+
+    def is_cvx(self):
+        # Only convex if no bilipschitz constraints
+        return not self.bilipschitz
 
     def pyomo_solving(self, x, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence, K =1.1,
                       solver = 'mosek') -> float:
@@ -571,3 +576,57 @@ class DirectOptimization(BaseTransform):
         with torch.no_grad():
             self.X_prime.copy_(torch.tensor(Z_opt, dtype=torch.float32))
         return result
+
+    def cvxpy_solving(self, x: np.ndarray, model: sklearn.linear_model.LogisticRegression,
+                      y_prime, y_prime_confidence, K=1.1, solver=cp.MOSEK) -> cp.Problem:
+        """
+        Solves the Independent optimization problem using CVXPY.
+        Since points are independent, this vectorizes extremely efficiently.
+        """
+        n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
+
+        # Decision Variables: The counterfactual points themselves
+        Z = cp.Variable((n, d))
+
+        # Objective: Minimize Sum of Squared Euclidean Distances
+        # L2^2 = sum((Z - X)^2)
+        objective = cp.Minimize(cp.sum_squares(Z - x))
+
+        # Constraints: Classification
+        constraints = []
+
+        # Vectorized classification constraint: Z @ w + b
+        logits = Z @ w_model.T + b_model
+
+        if y_prime == 1:
+            constraints.append(logits >= margin_logit)
+        else:
+            constraints.append(logits <= margin_logit)
+
+        # No Bilipschitz constraints added here if K = None.
+        # This is what makes it "Wachter" and not "Group CF".
+
+        # If K is specified, add only Lipschitz constraints
+        if K is not None:
+            # Lipschitz constraints (independent points)
+            # ||Z_i - Z_j||_2 <= K * ||X_i - X_j||_2
+            for i in range(n):
+                for j in range(i + 1, n):
+                    diffX = x[i] - x[j]
+                    distX = np.linalg.norm(diffX)
+                    constraints.append(cp.norm(Z[i, :] - Z[j, :], 2) <= K * distX)
+
+        # Solve
+        prob = cp.Problem(objective, constraints)
+
+        # CVXPY detects the diagonal structure and solves this very fast
+        prob.solve(solver=solver, verbose=False)
+
+        if prob.status != cp.OPTIMAL:
+            print(f"Warning: DirectOptimization CVXPY status: {prob.status}")
+
+        # Update parameters
+        with torch.no_grad():
+            self.X_prime.copy_(torch.tensor(Z.value, dtype=torch.float32))
+
+        return prob

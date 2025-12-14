@@ -35,7 +35,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_clusters', type=int, default=10, help='Number of clusters for subgrouping')
     parser.add_argument('--transform', type=str, default='FullAffine', help='Type of transform to use',
                         choices=['FullAffine', 'FullAffine_proxy', 'PSDAffine', 'PSDAffine_proxy', 'DiagonalAffine',
-                                 'DirectOptimization',
+                                 'DirectOptimization', 'Wachter', 'DirectOptimization_nb'
                                  'GaussianCommutativeTransform', 'GaussianTransform', 'GaussianTransform_proxy', 'GaussianScaleTransform',
                                  'GMMForwardTransform'])
     parser.add_argument('--math_opt', action='store_true', help='Use mathematical optimization')
@@ -171,32 +171,46 @@ if __name__ == "__main__":
             transform = get_transform(args.transform, X_sub, xl = xl, xu=xu, device = "cpu")
 
             if args.math_opt :
-                solver = cv.MOSEK if not args.transform in ["DirectOptimization","FullAffine"] else "gurobi"
+                solver = cv.MOSEK if transform.is_cvx() else "gurobi"
                 K_list = [1.01,1.5,2.0,3.5,5.0,7.5,10]
-                wass_list = []
-                wass_test_list = []
-                time_list = []
-                emp_lip_list = []
-                emp_lip_test_list = []
-                for K in K_list :
-                    wass, wass_test, emp_lip, emp_lip_test, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
-                                                 solver=solver)
-                    wass_list.append(wass)
-                    emp_lip_list.append(emp_lip)
-                    if wass_test is None or emp_lip_test is None:
-                        wass_test_list.append(wass)
-                        emp_lip_test_list.append(emp_lip)
-                    else :
-                        wass_test_list.append(wass_test)
-                        emp_lip_test_list.append(emp_lip_test)
-                    time_list.append(exec_time)
-                    print("Exec time label", y_orig, "cluster", i, "K", K, ":", exec_time, "seconds")
-                # Create df and save to csv
-                df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'Wasserstein test': wass_test_list,
-                                           'Empirical Bilipschitz': emp_lip_list,
-                                           'Empirical Bilipschitz test': emp_lip_test_list,
-                                           'Exec time': time_list})
-                df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
+                # First, check if transform is Wachter. If so, it has no param K
+                # Launch experiment only once and replicate for different K values
+                if args.transform == "Wachter":
+                    lenK = len(K_list)
+                    wass, _, emp_lip, _, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf,
+                                                 solver=solver, K=None)
+                    print("Exec time label", y_orig, "cluster", i, "Wachter:", exec_time, "seconds")
+                    # Create df and save to csv
+                    df_results = pd.DataFrame({'K' : K_list, 'Wasserstein': [wass]*lenK, 'Wasserstein test': [wass]*lenK,
+                                               'Empirical Bilipschitz': [emp_lip]*lenK,
+                                               'Empirical Bilipschitz test': [emp_lip]*lenK,
+                                               'Exec time': [exec_time]*lenK})
+                    df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
+                else :
+                    wass_list = []
+                    wass_test_list = []
+                    time_list = []
+                    emp_lip_list = []
+                    emp_lip_test_list = []
+                    for K in K_list :
+                        wass, wass_test, emp_lip, emp_lip_test, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
+                                                     solver=solver)
+                        wass_list.append(wass)
+                        emp_lip_list.append(emp_lip)
+                        if wass_test is None or emp_lip_test is None:
+                            wass_test_list.append(wass)
+                            emp_lip_test_list.append(emp_lip)
+                        else :
+                            wass_test_list.append(wass_test)
+                            emp_lip_test_list.append(emp_lip_test)
+                        time_list.append(exec_time)
+                        print("Exec time label", y_orig, "cluster", i, "K", K, ":", exec_time, "seconds")
+                    # Create df and save to csv
+                    df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'Wasserstein test': wass_test_list,
+                                               'Empirical Bilipschitz': emp_lip_list,
+                                               'Empirical Bilipschitz test': emp_lip_test_list,
+                                               'Exec time': time_list})
+                    df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
             # Non linear using Pymoo
             else :
                 # Pick which solver to use:
