@@ -619,7 +619,7 @@ class DirectOptimization(BaseTransform):
         # This is what makes it "Wachter" and not "Group CF".
 
         # If K is specified, add only Lipschitz constraints
-        if K is not None or self.type == 'independent':
+        if K is not None and self.type == 'lipschitz':
             # Lipschitz constraints (independent points)
             # ||Z_i - Z_j||_2 <= K * ||X_i - X_j||_2
             for i in range(n):

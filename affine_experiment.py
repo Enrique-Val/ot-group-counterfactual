@@ -211,7 +211,7 @@ if __name__ == "__main__":
                             low_lip_test_list.append(low_lip_test)
                             up_lip_test_list.append(up_lip_test)
                         time_list.append(exec_time)
-                        print("Exec time label", y_orig, "cluster", i, "K", K, ":", exec_time, "seconds")
+                        print("Exec time label", y_orig, "cluster", i, "K", K, "Method", args.transform,":", exec_time, "seconds")
                     # Create df and save to csv
                     df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'Wasserstein test': wass_test_list,
                                                'Empirical lower bound': low_lip_list,

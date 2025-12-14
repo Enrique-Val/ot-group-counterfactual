@@ -316,6 +316,10 @@ def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : 
     print("Solver time CV it:", tn - t0)
 
     if res_f is not None:
+        # If res_x only has one solution, convert to list
+        if len(res_f.shape) == 1:
+            res_f = [res_f]
+            res_x = [res_x]
         # Order solutions by f2 values
         order = np.argsort([i[1] for i in res_f])
         res_f = [res_f[i] for i in order]
