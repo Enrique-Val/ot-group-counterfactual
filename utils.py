@@ -406,11 +406,11 @@ def get_transform(transform_str,X_sub, xl = None, xu = None, device ="cpu") :
     elif transform_str == 'DiagonalAffine':
         transform = DiagonalAffine(d)
     elif transform_str == 'DirectOptimization':
-        transform = DirectOptimization(X_sub, xl, xu, bilipschitz=True)
+        transform = DirectOptimization(X_sub, xl, xu, type = 'bilipschitz')
     elif transform_str == 'Wachter':
-        transform = DirectOptimization(X_sub, xl, xu, bilipschitz=False)
+        transform = DirectOptimization(X_sub, xl, xu, type = 'independent')
     elif transform_str == 'DirectOptimization_nb':
-        transform = DirectOptimization(X_sub, xl, xu, bilipschitz=False)
+        transform = DirectOptimization(X_sub, xl, xu, type = 'lipschitz')
     elif transform_str == 'GaussianCommutativeTransform':
         transform = GaussianCommutativeTransform(d)
     elif transform_str == 'GaussianTransform':

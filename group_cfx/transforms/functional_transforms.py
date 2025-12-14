@@ -8,7 +8,7 @@ from torch import nn
 import cvxpy as cp
 import pyomo.environ as pyo
 
-from group_cfx.transforms.utils import distortion_metric, init_solving
+from group_cfx.transforms.utils import distortion_metric, init_solving, get_lipschitz_bounds
 
 
 class BaseTransform(nn.Module):
@@ -469,7 +469,7 @@ class DirectOptimization(BaseTransform):
     A 'model' that directly optimizes X' (counterfactuals for each individual).
     Compatible with your other transforms.
     """
-    def __init__(self, X_init, xl, xu, box_clip=True, bilipschitz = True):
+    def __init__(self, X_init, xl, xu, box_clip=True, type = 'bilipschitz'):
         super().__init__()
         # store original subgroup (not a parameter)
         self.register_buffer("X_orig", X_init.clone())
@@ -478,7 +478,19 @@ class DirectOptimization(BaseTransform):
         self.box_clip = box_clip
         self.xl = xl
         self.xu = xu
-        self.bilipschitz = bilipschitz
+        assert type in ['bilipschitz', 'lipschitz', 'independent'], "Invalid type for DirectOptimization"
+        self.type = type
+
+    def lipschitz_proxy(self,X_orig):
+        if self.type == 'bilipschitz' :
+            return distortion_metric(X_orig, self.forward(X_orig))
+        elif self.type == 'independent' :
+            return 0.5
+        elif self.type == 'lipschitz' :
+            bounds = get_lipschitz_bounds(X_orig, self.forward(X_orig))
+            return 1-1/bounds['max_expansion']
+        else :
+            raise ValueError("Invalid type for DirectOptimization")
 
     def forward(self, x=None):
         """
@@ -492,7 +504,7 @@ class DirectOptimization(BaseTransform):
 
     def is_cvx(self):
         # Only convex if no bilipschitz constraints
-        return not self.bilipschitz
+        return self.type != 'bilipschitz'
 
     def pyomo_solving(self, x, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence, K =1.1,
                       solver = 'mosek') -> float:
@@ -607,7 +619,7 @@ class DirectOptimization(BaseTransform):
         # This is what makes it "Wachter" and not "Group CF".
 
         # If K is specified, add only Lipschitz constraints
-        if K is not None:
+        if K is not None or self.type == 'independent':
             # Lipschitz constraints (independent points)
             # ||Z_i - Z_j||_2 <= K * ||X_i - X_j||_2
             for i in range(n):
