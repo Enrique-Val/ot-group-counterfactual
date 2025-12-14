@@ -257,12 +257,11 @@ def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.
         with torch.no_grad():
             X_transformed = transform(X_sub_test.to(device)).cpu().numpy()
         wass_test = np.mean(np.linalg.norm(X_transformed - X_sub_test.numpy(), axis=-1, ord=2))
-        emp_lip_test = 1 - distortion_metric(X_sub_test, torch.tensor(X_transformed, dtype=torch.float32))
+        emp_lip_test = distortion_metric(X_sub_test, torch.tensor(X_transformed, dtype=torch.float32))
     with torch.no_grad():
         X_transformed = transform(X_sub_train.to(device)).cpu().numpy()
     wass = np.mean(np.linalg.norm(X_transformed - X_sub_train.numpy(), axis=-1, ord=2))
-    emp_lip = 1 - distortion_metric(X_sub_train, torch.tensor(X_transformed, dtype=torch.float32))
-    # Likely TODO : Change to double precision for better accuracy in empirical lipschitz
+    emp_lip = distortion_metric(X_sub_train, torch.tensor(X_transformed, dtype=torch.float32))
     return wass, wass_test, emp_lip, emp_lip_test, tn - t0
 
 def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confidence, K, solver, device = "cpu"):
