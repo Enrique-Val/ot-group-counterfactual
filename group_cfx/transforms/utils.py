@@ -16,37 +16,59 @@ def wasserstein_distance_normals(m0, C0, m1, C1, sqrt_C0=None) :
 
     return mean_diff + cov_term
 
-def bi_lipschitz_metric(X, Y, eps=1e-12):
+
+def get_lipschitz_bounds(X, Y, eps=1e-8):
     """
-    Empirical bi-Lipschitz constant between X and Y.
+    Verifies if the Lipschitz ratio ||Ay - Ay'|| / ||x - x'||
+    stays within expected bounds.
+    """
+    # Previous step, convert tensor to float64 for better numerical stability
+    X = X.double()
+    Y = Y.double()
+
+    # 1. Use torch.cdist for numerically stable Euclidean distance
+    # p=2 computes the standard L2 norm
+    dist_X = torch.cdist(X, X, p=2)
+    dist_Y = torch.cdist(Y, Y, p=2)
+
+    # 2. Handle the "Diagonal Problem"
+    # We create a mask for non-diagonal elements
+    n = X.shape[0]
+    mask = ~torch.eye(n, dtype=torch.bool, device=X.device)
+
+    # Filter out the diagonals (where distance is 0)
+    valid_dist_X = dist_X[mask]
+    valid_dist_Y = dist_Y[mask]
+
+    # 3. Calculate the actual expansion ratios
+    # We only care about valid distances > eps to avoid instability
+    valid_indices = valid_dist_X > eps
+    final_ratios = valid_dist_Y[valid_indices] / valid_dist_X[valid_indices]
+
+    return {
+        "min_expansion": final_ratios.min().item(),
+        "max_expansion": final_ratios.max().item(),
+    }
+
+def distortion_metric(X, Y, eps=1e-8):
+    """
+    Empirical distortion between X and Y.
 
     X, Y: tensors of shape (n, d) or (d,)  (before/after transform)
     eps: numerical stability
 
     Returns:
-        M: estimated bi-Lipschitz constant
+        M: estimated distortion, where M = 0 means isometric, M > 0 means distorted.
     """
 
-    # Compute distance between every pair of X
-    n = X.shape[0]
-    sq_norms = (X ** 2).sum(dim=1, keepdim=True)
-    dists_sq = sq_norms + sq_norms.T - 2 * X @ X.T
-    dists_sq = torch.clamp(dists_sq, min=0.0)
-    dists_X = torch.sqrt(dists_sq)
+    # 1. Get Lipschitz bounds
+    lipschitz_bounds = get_lipschitz_bounds(X, Y, eps=eps)
 
-    sq_norms = (Y ** 2).sum(dim=1, keepdim=True)
-    dists_sq = sq_norms + sq_norms.T - 2 * Y @ Y.T
-    dists_sq = torch.clamp(dists_sq, min=0.0)
-    dists_Y = torch.sqrt(dists_sq)
+    # Get the one that represents the bigger distortion
+    distortion = min(lipschitz_bounds["min_expansion"], 1.0 / lipschitz_bounds["max_expansion"])
 
-    # Avoid division by zero by adding eps to distances
-    ratio1 = dists_Y / (dists_X + eps)
-    ratio2 = dists_X / (dists_Y + eps)
-
-    # Elementwise min of the two ratios
-    ratio = torch.min(ratio1, ratio2)
-    M = ratio.mean().item()
-    return 1-M
+    # Invert it to get a metric where 1 means isometric, 0 means distorted
+    return 1-distortion
 
 def build_covariance_matrix(marginal_stds, correlation_triangle) :
     """

@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 from pyomo.contrib.parmest.graphics import sns
 
+import matplotlib.pyplot as plt
+
 
 def list_params(root_dir, n_clusters=5, exp_type = "math_opt"):
     datasets = [i for i in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, i)) and not i.startswith('_') and not i == "plots"]
@@ -103,15 +105,147 @@ def friedman_posthoc(data, correct="bergmann", eps = 1e-5) -> dict[str, pd.DataF
 
     return bh_posthoc
 
+
+def plot_performance_profile(df, metric, title=None, ax=None, palette=None, max_x=5, verbose=False, maximize = False):
+    """
+    Generates a Dolan-More Performance Profile.
+
+    Args:
+        df: DataFrame containing columns ['dataset', 'label_cluster', 'K', 'transform', 'value']
+            (Must be the RAW dataframe, including DirectOptimization)
+        metric: The specific metric to filter for (e.g., "Time" or "Wasserstein test")
+        title: Optional title for the plot
+        ax: Optional matplotlib axis to plot on
+    """
+    # Filter for the specific metric
+    df_subset = df[df["metric"] == metric].copy()
+
+    # Substitue nans for a large number (worse performance)
+    # Compute ratio of nan values
+    n_nans = df_subset["value"].isna().sum()
+    total = len(df_subset)
+    print(f"Substituting {n_nans} NaN values out of {total} ({(n_nans/total)*100:.2f}%) for metric {metric}")
+    df_subset["value"] = df_subset["value"].fillna(df_subset["value"].max() * 100)
+
+    # 1. Identify the BEST value for each problem instance
+    # A "problem instance" is defined by (Dataset + Cluster + K) or just (Dataset + label_cluster)
+    possible_group_cols = ["dataset", "label_cluster", "K"]
+    group_cols = [c for c in possible_group_cols if c in df_subset.columns]
+
+    problem_groups = df_subset.groupby(group_cols)
+
+    if maximize:
+        # Best = Max value
+        best_values = df_subset.groupby(group_cols)["value"].transform("max")
+    else:
+        # Best = Min value
+        best_values = df_subset.groupby(group_cols)["value"].transform("min")
+
+        # --- 3. Calculate Performance Ratio (tau) ---
+        # The best method always gets a ratio of 1.0. Worse methods get > 1.0.
+
+    if maximize:
+        # Formula: Best / Value
+        # Example: Best=10, You=2. Ratio = 10/2 = 5 (You are 5x worse)
+        # Protect against division by zero if value is 0
+        df_subset["ratio"] = best_values / df_subset["value"].replace(0, 1e-10)
+    else:
+        # Formula: Value / Best
+        # Example: Best=2, You=10. Ratio = 10/2 = 5 (You are 5x worse)
+        df_subset["ratio"] = df_subset["value"] / best_values.replace(0, 1e-10)
+
+    # 3. Plotting
+    if ax is None:
+        fig, ax = plt.subplots(figsize=fig_size)
+
+    transforms = df_subset["transform"].unique()
+    transforms = [t for t in plot_order if t in transforms]
+
+    # --- STYLE DEFINITIONS ---
+    # Cycle through these to distinguish lines beyond just color
+    line_styles = ['-', '--', '-.', ':']
+    # Distinct markers (Circle, Square, Triangle Up, Diamond, Triangle Down, X, Plus, Star)
+    markers = ['o', 's', '^', 'D', 'v', 'X', 'P', '*']
+
+    for i,t in enumerate(transforms):
+        # Extract ratios for this specific transform
+        t_ratios = df_subset[df_subset["transform"] == t]["ratio"]
+
+        if len(t_ratios) == 0:
+            continue
+
+        # Sort ratios to calculate the Cumulative Distribution Function (CDF)
+        sorted_ratios = np.sort(t_ratios)
+        yvals = np.arange(1, len(sorted_ratios) + 1) / len(sorted_ratios)
+
+        if verbose:
+            print(f"Transform: {t}, Number of instances: {len(sorted_ratios)}")
+            # Print every k (x,y) pairs
+            k = max(1, len(sorted_ratios) // 10)
+            for xi, yi in zip(sorted_ratios[::k], yvals[::k]):
+                print(f"  Ratio: {xi:.4f}, CDF: {yi:.4f}")
+
+
+        # --- DYNAMIC STYLING ---
+        # 1. Get Color
+        color = palette.get(t, None) if palette else None
+
+        # 2. Get Linestyle (Cycle through the 4 types)
+        ls = line_styles[i % len(line_styles)]
+
+        # 3. Get Marker (Cycle through types)
+        mk = markers[i % len(markers)]
+
+        # 4. Calculate 'markevery'
+        # This ensures we only see ~5 markers per line, preventing clutter
+        n_points = len(sorted_ratios)
+        mark_stride = max(1, n_points // 5)
+
+        # Plot step function
+        ax.step(
+            sorted_ratios,
+            yvals,
+            where='post',
+            label=t,
+            linewidth=2,
+            color=color,
+            linestyle=ls,  # <--- Adds pattern
+            marker=mk,  # <--- Adds symbol
+            markevery=mark_stride,  # <--- Prevents clutter
+            markersize=6,  # <--- Readable size
+            alpha=0.9  # <--- Slight transparency for overlapping lines
+        )
+    # 4. Formatting
+    ax.set_xscale("log")
+    ax.set_xlim(1, max_x)  # Limits x-axis to 100x the cost of the best method
+    ax.set_xlabel(f"Performance ratio (relative to best method)")
+    ax.set_ylabel(f"Fraction of problems solved")
+    if title is not None:
+        ax.set_title(title)
+    ax.legend(title="Method", loc="lower right")
+    ax.grid(True, which="both", linestyle="--", alpha=0.5)
+
+    return ax
+
+
 renaming = {"DiagonalAffine" : "Diag. \n affine", "GaussianCommutativeTransform" : "Comm. \n Gaussian",
                 "GaussianTransform" : "Any \n Gaussian", "PSDAffine" : "PSD \n affine", "GMMForwardTransform" : "3-GMM",
                 "DirectOptimization" : "Baseline", "FullAffine" : "Any \n affine",
              "GaussianScaleTransform" : "Scaled \n Gaussian"}
 
-plot_order = ["Baseline", "Any \n affine", "PSD \n affine", "Diag. \n affine", "Any \n Gaussian", "Comm. \n Gaussian", "Scaled \n Gaussian" , "3-GMM"]
+plot_order = ["Baseline", "PSD \n affine", "Diag. \n affine", "Any \n Gaussian", "Comm. \n Gaussian", "Scaled \n Gaussian" , "3-GMM"]
 
+renaming_nb = {"DiagonalAffine" : "Diag. affine", "GaussianCommutativeTransform" : "Comm. Gaussian",
+                "GaussianTransform" : "Any Gaussian", "PSDAffine" : "PSD affine", "GMMForwardTransform" : "3-GMM",
+                "DirectOptimization" : "Baseline", "FullAffine" : "Any affine",
+                "GaussianScaleTransform" : "Scaled Gaussian"}
 
-palette = sns.color_palette("husl", len(plot_order))
+plot_order_bn = ["Baseline", "PSD affine", "Diag. affine", "Any Gaussian", "Comm. Gaussian", "Scaled Gaussian" , "3-GMM"]
+
+renaming = renaming_nb
+plot_order = plot_order_bn
+
+palette = sns.color_palette("deep", len(plot_order))
 palette = {t: palette[i] for i, t in enumerate(plot_order)}
 
-fig_size = (6.75,3.5)
+fig_size = np.array((6.75*0.7,3.5*0.7))

@@ -6,13 +6,13 @@ import torch
 from scipy.linalg import sqrtm
 from scipy.special import digamma
 from scipy.stats._multivariate import multivariate_normal_gen
-from torch import nn
+from torch import nn, dtype
 from scipy.stats import multivariate_normal, multivariate_t
 from sklearn.mixture import GaussianMixture
 
 from group_cfx.transforms.functional_transforms import BaseTransform
 from group_cfx.transforms.utils import wasserstein_distance_normals, compute_A, build_covariance_matrix, \
-    bi_lipschitz_metric, init_solving
+    distortion_metric, init_solving
 
 
 class ProbabilisticTransform(BaseTransform):

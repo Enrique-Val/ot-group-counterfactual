@@ -17,7 +17,7 @@ from group_cfx.transforms.functional_transforms import DirectOptimization, FullA
 from group_cfx.transforms.gaussian_transforms import GaussianCommutativeTransform, GaussianTransform, \
     GaussianScaleTransform
 from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform
-from group_cfx.transforms.utils import bi_lipschitz_metric
+from group_cfx.transforms.utils import distortion_metric, get_lipschitz_bounds
 
 
 def synthetic_2d(noise_scale=0, size = 1000, random_state=0) -> tuple[np.ndarray, np.ndarray]:
@@ -249,17 +249,21 @@ def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.
         tn = time.time()
         if pv is None:
             print("No solution found (Pyomo)")
-            return None, None, tn - t0
+            return None, None, None, None, tn - t0
 
     wass_test = None
+    emp_lip_test = None
     if X_sub_test is not None:
         with torch.no_grad():
             X_transformed = transform(X_sub_test.to(device)).cpu().numpy()
         wass_test = np.mean(np.linalg.norm(X_transformed - X_sub_test.numpy(), axis=-1, ord=2))
+        emp_lip_test = 1 - distortion_metric(X_sub_test, torch.tensor(X_transformed, dtype=torch.float32))
     with torch.no_grad():
         X_transformed = transform(X_sub_train.to(device)).cpu().numpy()
     wass = np.mean(np.linalg.norm(X_transformed - X_sub_train.numpy(), axis=-1, ord=2))
-    return wass, wass_test, tn - t0
+    emp_lip = 1 - distortion_metric(X_sub_train, torch.tensor(X_transformed, dtype=torch.float32))
+    # Likely TODO : Change to double precision for better accuracy in empirical lipschitz
+    return wass, wass_test, emp_lip, emp_lip_test, tn - t0
 
 def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confidence, K, solver, device = "cpu"):
     if isinstance(transform, DirectOptimization):
@@ -270,6 +274,8 @@ def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confid
     fold_size = n // 10
     wass_list = []
     wass_test_list = []
+    emp_lip_list = []
+    emp_list_test_list = []
     time_list = []
     for i in range(10):
         start = i * fold_size
@@ -277,14 +283,16 @@ def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confid
         X_sub_train = torch.cat([X_sub[:start], X_sub[end:]], dim=0)
         X_sub_test = X_sub[start:end]
 
-        wass, wass_test, time = direct_experiment(transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, K, solver,
+        wass, wass_test, emp_lip, emp_lip_test, time = direct_experiment(transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, K, solver,
                                        device)
         if wass is None:
             continue
         wass_list.append(wass)
         wass_test_list.append(wass_test)
+        emp_lip_list.append(emp_lip)
+        emp_list_test_list.append(emp_lip_test)
         time_list.append(time)
-    return np.mean(wass_list), np.mean(wass_test_list), np.mean(time_list)
+    return np.mean(wass_list), np.mean(wass_test_list), np.mean(emp_lip_list), np.mean(emp_list_test_list), np.mean(time_list)
 
 def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : torch.Tensor, f, y_prime,
                             y_prime_confidence, solver, device = "cpu", random_seed = 0):
@@ -309,7 +317,7 @@ def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : 
         for j in range(len(res_x)):
             transform.load_parameters(res_x[j])
             with torch.no_grad():
-                lip = bi_lipschitz_metric(X_sub_train, transform(X_sub_train))
+                lip = distortion_metric(X_sub_train, transform(X_sub_train))
             # Convert to 1-Lipschitz
             lip_real[j] = lip
         res_f = np.hstack([res_f, lip_real.reshape(-1, 1)])
@@ -332,7 +340,7 @@ def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : 
                 wasserstein = np.mean(np.linalg.norm(diff, axis=-1, ord=2))
                 res_f_test[j, 0] = wasserstein
                 # Empirical test Lipschitz
-                lip = bi_lipschitz_metric(X_sub_test, X_sub_test_prime)
+                lip = distortion_metric(X_sub_test, X_sub_test_prime)
                 res_f_test[j, 1] = lip
 
             # Store results in a dataframe

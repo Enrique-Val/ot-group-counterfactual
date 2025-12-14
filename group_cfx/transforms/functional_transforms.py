@@ -8,7 +8,7 @@ from torch import nn
 import cvxpy as cp
 import pyomo.environ as pyo
 
-from group_cfx.transforms.utils import bi_lipschitz_metric, init_solving
+from group_cfx.transforms.utils import distortion_metric, init_solving
 
 
 class BaseTransform(nn.Module):
@@ -29,7 +29,7 @@ class BaseTransform(nn.Module):
 
     def lipschitz_proxy(self,X_orig):
         # By default, use the empirical Lipschitz computation, which can be slow
-        return bi_lipschitz_metric(X_orig, self.forward(X_orig))
+        return distortion_metric(X_orig, self.forward(X_orig))
 
     def wasserstein_projection_distance(self, X_orig) -> float :
         return torch.mean(torch.norm(self.forward(X_orig) - X_orig, dim=1, p=2)).item()
