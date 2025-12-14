@@ -249,11 +249,12 @@ def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.
         tn = time.time()
         if pv is None:
             print("No solution found (Pyomo)")
-            return None, None, None, None, tn - t0
+            return None, None, None, None, None, None, 0, tn - t0
 
     wass_test = None
     low_lip_test = None
     up_lip_test = None
+    validity = 1
     if X_sub_test is not None:
         with torch.no_grad():
             X_transformed = transform(X_sub_test.to(device)).cpu().numpy()
@@ -261,13 +262,19 @@ def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.
         bound_dict = get_lipschitz_bounds(X_sub_test, torch.tensor(X_transformed, dtype=torch.float32))
         low_lip_test = bound_dict['min_expansion']
         up_lip_test = bound_dict['max_expansion']
+        # Check if the transported points satisfy the classifier constraint
+        # 1. Get predictions on transformed points
+        preds = f.predict_proba(X_transformed)
+        probs_y_target = preds[:, y_prime]
+        # 2. Check the proportion of points satisfying the constraint
+        validity = (probs_y_target >= y_prime_confidence).mean()
     with torch.no_grad():
         X_transformed = transform(X_sub_train.to(device)).cpu().numpy()
     wass = np.mean(np.linalg.norm(X_transformed - X_sub_train.numpy(), axis=-1, ord=2))
     bound_dict = get_lipschitz_bounds(X_sub_train, torch.tensor(X_transformed, dtype=torch.float32))
     low_lip = bound_dict['min_expansion']
     up_lip = bound_dict['max_expansion']
-    return wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, tn - t0
+    return wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, validity, tn - t0
 
 def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confidence, K, solver, device = "cpu"):
     if isinstance(transform, DirectOptimization):
@@ -282,6 +289,7 @@ def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confid
     low_list_test_list = []
     up_lip_list = []
     up_list_test_list = []
+    validity_list = []
     time_list = []
     for i in range(10):
         start = i * fold_size
@@ -289,7 +297,7 @@ def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confid
         X_sub_train = torch.cat([X_sub[:start], X_sub[end:]], dim=0)
         X_sub_test = X_sub[start:end]
 
-        wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, time = direct_experiment(transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, K, solver,
+        wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, validity, time = direct_experiment(transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, K, solver,
                                        device)
         if wass is None:
             continue
@@ -299,9 +307,10 @@ def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confid
         low_list_test_list.append(low_lip_test)
         up_lip_list.append(up_lip)
         up_list_test_list.append(up_lip_test)
+        validity_list.append(validity)
         time_list.append(time)
     return (np.mean(wass_list), np.mean(wass_test_list), np.mean(low_lip_list), np.mean(low_list_test_list),
-            np.mean(up_lip_list), np.mean(up_list_test_list), np.mean(time_list))
+            np.mean(up_lip_list), np.mean(up_list_test_list), np.mean(validity_list), np.mean(time_list))
 
 def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : torch.Tensor, f, y_prime,
                             y_prime_confidence, solver, device = "cpu", random_seed = 0):

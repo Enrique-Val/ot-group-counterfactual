@@ -21,6 +21,14 @@ import joblib
 
 import cvxpy as cv
 
+import warnings
+
+# Suppress the specific CPP backend warning from cvxpy
+warnings.filterwarnings(
+    "ignore",
+    message="The problem includes expressions that don't support CPP backend.*"
+)
+
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 
@@ -177,7 +185,7 @@ if __name__ == "__main__":
                 # Launch experiment only once and replicate for different K values
                 if args.transform == "Wachter":
                     lenK = len(K_list)
-                    wass, _, low_lip, _, up_lip, _, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf,
+                    wass, _, low_lip, _, up_lip, _, _, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf,
                                                  solver=solver, K=None)
                     print("Exec time label", y_orig, "cluster", i, "Wachter:", exec_time, "seconds")
                     # Create df and save to csv
@@ -186,6 +194,7 @@ if __name__ == "__main__":
                                                'Empirical lower bound test': [low_lip]*lenK,
                                                'Empirical upper bound': [up_lip]*lenK,
                                                'Empirical upper bound test': [up_lip]*lenK,
+                                               'Validity test' : [1.0]*lenK,
                                                'Exec time': [exec_time]*lenK})
                     df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
                 else :
@@ -196,12 +205,14 @@ if __name__ == "__main__":
                     low_lip_test_list = []
                     up_lip_list = []
                     up_lip_test_list = []
+                    validity_list = []
                     for K in K_list :
-                        wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
+                        wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, validity, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
                                                      solver=solver)
                         wass_list.append(wass)
                         low_lip_list.append(low_lip)
                         up_lip_list.append(up_lip)
+                        validity_list.append(validity)
                         if wass_test is None or low_lip_test is None or up_lip_test is None:
                             wass_test_list.append(wass)
                             low_lip_test_list.append(low_lip)
@@ -218,6 +229,7 @@ if __name__ == "__main__":
                                                'Empirical lower bound test': low_lip_test_list,
                                                'Empirical upper bound': up_lip_list,
                                                'Empirical upper bound test': up_lip_test_list,
+                                               'Validity test': validity_list,
                                                'Exec time': time_list})
                     df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
             # Non linear using Pymoo
