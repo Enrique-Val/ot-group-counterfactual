@@ -35,7 +35,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_clusters', type=int, default=10, help='Number of clusters for subgrouping')
     parser.add_argument('--transform', type=str, default='FullAffine', help='Type of transform to use',
                         choices=['FullAffine', 'FullAffine_proxy', 'PSDAffine', 'PSDAffine_proxy', 'DiagonalAffine',
-                                 'DirectOptimization', 'Wachter', 'DirectOptimization_nb'
+                                 'DirectOptimization', 'Wachter', 'DirectOptimization_nb',
                                  'GaussianCommutativeTransform', 'GaussianTransform', 'GaussianTransform_proxy', 'GaussianScaleTransform',
                                  'GMMForwardTransform'])
     parser.add_argument('--math_opt', action='store_true', help='Use mathematical optimization')
@@ -177,13 +177,15 @@ if __name__ == "__main__":
                 # Launch experiment only once and replicate for different K values
                 if args.transform == "Wachter":
                     lenK = len(K_list)
-                    wass, _, emp_lip, _, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf,
+                    wass, _, low_lip, _, up_lip, _, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf,
                                                  solver=solver, K=None)
                     print("Exec time label", y_orig, "cluster", i, "Wachter:", exec_time, "seconds")
                     # Create df and save to csv
                     df_results = pd.DataFrame({'K' : K_list, 'Wasserstein': [wass]*lenK, 'Wasserstein test': [wass]*lenK,
-                                               'Empirical Bilipschitz': [emp_lip]*lenK,
-                                               'Empirical Bilipschitz test': [emp_lip]*lenK,
+                                               'Empirical lower bound': [low_lip]*lenK,
+                                               'Empirical lower bound test': [low_lip]*lenK,
+                                               'Empirical upper bound': [up_lip]*lenK,
+                                               'Empirical upper bound test': [up_lip]*lenK,
                                                'Exec time': [exec_time]*lenK})
                     df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
                 else :
