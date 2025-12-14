@@ -190,25 +190,32 @@ if __name__ == "__main__":
                     wass_list = []
                     wass_test_list = []
                     time_list = []
-                    emp_lip_list = []
-                    emp_lip_test_list = []
+                    low_lip_list = []
+                    low_lip_test_list = []
+                    up_lip_list = []
+                    up_lip_test_list = []
                     for K in K_list :
-                        wass, wass_test, emp_lip, emp_lip_test, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
+                        wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
                                                      solver=solver)
                         wass_list.append(wass)
-                        emp_lip_list.append(emp_lip)
-                        if wass_test is None or emp_lip_test is None:
+                        low_lip_list.append(low_lip)
+                        up_lip_list.append(up_lip)
+                        if wass_test is None or low_lip_test is None or up_lip_test is None:
                             wass_test_list.append(wass)
-                            emp_lip_test_list.append(emp_lip)
+                            low_lip_test_list.append(low_lip)
+                            up_lip_test_list.append(up_lip)
                         else :
                             wass_test_list.append(wass_test)
-                            emp_lip_test_list.append(emp_lip_test)
+                            low_lip_test_list.append(low_lip_test)
+                            up_lip_test_list.append(up_lip_test)
                         time_list.append(exec_time)
                         print("Exec time label", y_orig, "cluster", i, "K", K, ":", exec_time, "seconds")
                     # Create df and save to csv
                     df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'Wasserstein test': wass_test_list,
-                                               'Empirical Bilipschitz': emp_lip_list,
-                                               'Empirical Bilipschitz test': emp_lip_test_list,
+                                               'Empirical lower bound': low_lip_list,
+                                               'Empirical lower bound test': low_lip_test_list,
+                                               'Empirical upper bound': up_lip_list,
+                                               'Empirical upper bound test': up_lip_test_list,
                                                'Exec time': time_list})
                     df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
             # Non linear using Pymoo
