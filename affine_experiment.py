@@ -206,7 +206,22 @@ if __name__ == "__main__":
                     up_lip_list = []
                     up_lip_test_list = []
                     validity_list = []
+                    prev_K = None
                     for K in K_list :
+                        if isinstance(transform, DirectOptimization) and prev_K is not None and wass_list[-1] is not None and wass_list[-1] < 1000 and prev_K > 1/low_lip_list[-1] and K > up_lip_list[-1]:
+                            # Replicate previous results to save time
+                            wass_list.append(wass_list[-1])
+                            wass_test_list.append(wass_test_list[-1])
+                            low_lip_list.append(low_lip_list[-1])
+                            low_lip_test_list.append(low_lip_test_list[-1])
+                            up_lip_list.append(up_lip_list[-1])
+                            up_lip_test_list.append(up_lip_test_list[-1])
+                            validity_list.append(validity_list[-1])
+                            time_list.append(0.0)
+                            print("Replicated results for label", y_orig, "cluster", i, "K", K)
+                            prev_K = K
+                            continue
+
                         wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, validity, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf, K=K,
                                                      solver=solver)
                         wass_list.append(wass)
@@ -222,6 +237,7 @@ if __name__ == "__main__":
                             low_lip_test_list.append(low_lip_test)
                             up_lip_test_list.append(up_lip_test)
                         time_list.append(exec_time)
+                        prev_K = K
                         print("Exec time label", y_orig, "cluster", i, "K", K, "Method", args.transform,":", exec_time, "seconds")
                     # Create df and save to csv
                     df_results = pd.DataFrame({'K': K_list, 'Wasserstein': wass_list, 'Wasserstein test': wass_test_list,
