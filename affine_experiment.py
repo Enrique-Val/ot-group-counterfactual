@@ -208,7 +208,7 @@ if __name__ == "__main__":
                     validity_list = []
                     prev_K = None
                     for K in K_list :
-                        if isinstance(transform, DirectOptimization) and prev_K is not None and wass_list[-1] is not None and wass_list[-1] < 1000 and prev_K > 1/low_lip_list[-1] and K > up_lip_list[-1]:
+                        if args.transform == "DirectOptimization" and prev_K is not None and wass_list[-1] is not None and wass_list[-1] < 1000 and prev_K > 1/low_lip_list[-1] and K > up_lip_list[-1]:
                             # Replicate previous results to save time
                             wass_list.append(wass_list[-1])
                             wass_test_list.append(wass_test_list[-1])
