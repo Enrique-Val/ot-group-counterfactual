@@ -520,7 +520,7 @@ class DirectOptimization(BaseTransform):
         model.D = pyo.RangeSet(0, d - 1)
 
         # Decision variables
-        model.Z = pyo.Var(model.N, model.D, domain=pyo.Reals, bounds=[self.xl, self.xu])
+        model.Z = pyo.Var(model.N, model.D, domain=pyo.Reals, bounds=[self.xl-1, self.xu+1])
 
         # Objective: sum of squared deviations
         def obj_rule(m):

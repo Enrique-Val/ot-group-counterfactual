@@ -218,7 +218,7 @@ if __name__ == "__main__":
                             up_lip_list.append(up_lip_list[-1])
                             up_lip_test_list.append(up_lip_test_list[-1])
                             validity_list.append(validity_list[-1])
-                            time_list.append(0.0)
+                            time_list.append(time_list[-1])
                             print("Replicated results for label", y_orig, "cluster", i, "K", K)
                             prev_K = K
                             continue
