@@ -520,7 +520,7 @@ class DirectOptimization(BaseTransform):
         model.D = pyo.RangeSet(0, d - 1)
 
         # Decision variables
-        model.Z = pyo.Var(model.N, model.D, domain=pyo.Reals)
+        model.Z = pyo.Var(model.N, model.D, domain=pyo.Reals, bounds=[self.xl, self.xu])
 
         # Objective: sum of squared deviations
         def obj_rule(m):
@@ -575,8 +575,8 @@ class DirectOptimization(BaseTransform):
         solver_instance = pyo.SolverFactory(solver)
         if solver == "gurobi":
             solver_instance.options['NonConvex'] = 2
-            solver_instance.options['TimeLimit'] = 1500
-            solver_instance.options['NoRelHeurTime'] = 300
+            solver_instance.options['TimeLimit'] = 1800
+            solver_instance.options['NoRelHeurTime'] = 100
             solver_instance.options['MIPFocus'] = 1
         try :
             result = solver_instance.solve(model)

@@ -207,8 +207,9 @@ if __name__ == "__main__":
                     up_lip_test_list = []
                     validity_list = []
                     prev_K = None
+                    replicate = False
                     for K in K_list :
-                        if args.transform == "DirectOptimization" and prev_K is not None and wass_list[-1] is not None and wass_list[-1] < 1000 and prev_K > 1/low_lip_list[-1] and K > up_lip_list[-1]:
+                        if replicate:
                             # Replicate previous results to save time
                             wass_list.append(wass_list[-1])
                             wass_test_list.append(wass_test_list[-1])
@@ -237,6 +238,8 @@ if __name__ == "__main__":
                             low_lip_test_list.append(low_lip_test)
                             up_lip_test_list.append(up_lip_test)
                         time_list.append(exec_time)
+                        if args.transform == "DirectOptimization" and prev_K is not None and wass_list[-1] is not None and wass_list[-1] < 1000 and prev_K > 1/low_lip_list[-1] and K > up_lip_list[-1]:
+                            replicate = True
                         prev_K = K
                         print("Exec time label", y_orig, "cluster", i, "K", K, "Method", args.transform,":", exec_time, "seconds")
                     # Create df and save to csv
