@@ -10,6 +10,9 @@ import pyomo.environ as pyo
 
 from group_cfx.transforms.utils import distortion_metric, init_solving, get_lipschitz_bounds
 
+import gurobipy as gp
+from gurobipy import GRB
+
 
 class BaseTransform(nn.Module):
     def clip_to_box(self, x):
@@ -508,6 +511,9 @@ class DirectOptimization(BaseTransform):
 
     def pyomo_solving(self, x, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence, K =1.1,
                       solver = 'mosek') -> float:
+        # Call gurobipy solver to solve the non-convex problem
+        x = np.array(x)
+        return self.gurobi_solving_fast(x,model, y_prime, y_prime_confidence, K)
         n,d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
 
         #assert np.all(np.isfinite(x))
@@ -642,3 +648,53 @@ class DirectOptimization(BaseTransform):
             self.X_prime.copy_(torch.tensor(Z.value, dtype=torch.float32))
 
         return prob
+
+    def gurobi_solving_fast(self, x, model_sklearn, y_prime, y_prime_confidence, K=1.1, time_limit=1800):
+        n, d, w_model, b_model, margin_logit = init_solving(x, model_sklearn, y_prime, y_prime_confidence)
+
+        m = gp.Model("counterfactuals")
+
+        # 1. Variables using Matrix API (Massive speedup for model building)
+        Z = m.addMVar((n, d), lb=self.xl - 1, ub=self.xu + 1, name="Z")
+
+        # 2. Objective: Sum of squares (Matrix form: ||Z - x||^2)
+        diff = Z - x
+        m.setObjective((diff * diff).sum(), GRB.MINIMIZE)
+
+        # 3. Classification (Matrix multiplication: Z @ w + b)
+        # This replaces the i-loop for constraints
+        logits = Z @ w_model + b_model
+        if y_prime == 1:
+            m.addConstr(logits >= margin_logit)
+        else:
+            m.addConstr(logits <= margin_logit)
+
+        # 4. Bi-Lipschitz (Still O(n^2), but more efficient)
+        K_sq = K ** 2
+        inv_K_sq = 1.0 / K_sq
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                dist_X = np.sum((x[i] - x[j]) ** 2)
+                # Vector subtraction and dot product for dist_Z
+                diff_Z = Z[i, :] - Z[j, :]
+                dist_Z = diff_Z @ diff_Z
+
+                m.addConstr(dist_Z >= inv_K_sq * dist_X)
+                m.addConstr(dist_Z <= K_sq * dist_X)
+
+        m.Params.NonConvex = 2
+        m.Params.TimeLimit = time_limit
+        m.Params.MIPFocus = 1
+        m.Params.NoRelHeurTime = 100
+        m.optimize()
+
+        if m.SolCount > 0:
+            Z_opt = np.array([[Z[i, j].X for j in range(d)] for i in range(n)])
+            # Update your torch tensor here
+            with torch.no_grad():
+                self.X_prime.copy_(torch.tensor(Z_opt, dtype=torch.float32))
+            return m.ObjVal
+        else:
+            print("No solution found within time limit.")
+            return None
