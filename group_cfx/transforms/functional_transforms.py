@@ -802,16 +802,43 @@ class DirectOptimization(BaseTransform):
 
         return
 
+    def get_landmarks_fps(self, x, num_landmarks, random_seed=0):
+        """
+        Selects landmarks using Farthest Point Sampling (FPS).
+        Returns indices of the selected landmarks.
+        """
+        n_samples = x.shape[0]
+        rng = np.random.RandomState(random_seed)
+
+        # 1. Start with one random point
+        landmarks = [rng.randint(0, n_samples)]
+
+        # 2. Initialize distances: dist from every point to the FIRST landmark
+        # shape: (n_samples,)
+        dists = np.sum((x - x[landmarks[0]]) ** 2, axis=1)
+
+        # 3. Iteratively pick the farthest point
+        for _ in range(1, num_landmarks):
+            # The new landmark is the point with the largest current minimum distance
+            new_id = np.argmax(dists)
+            landmarks.append(new_id)
+
+            # 4. Update distances
+            # New dist = min(old_dist, dist_to_new_landmark)
+            new_dists = np.sum((x - x[new_id]) ** 2, axis=1)
+            dists = np.minimum(dists, new_dists)
+
+        return np.array(landmarks)
+
     def gurobi_solving_landmarks(self, x, model_lr, y_prime, y_prime_confidence, K=1.1, num_landmarks=None):
         x = np.array(x)
         n, d, w_model, b_model, margin_logit = init_solving(x, model_lr, y_prime, y_prime_confidence)
         if num_landmarks is None: num_landmarks = int(np.sqrt(n))
 
-        # 1. Setup Landmarks (Real point indices)
-        kmeans = KMeans(n_clusters=num_landmarks, random_state=0).fit(x)
-        landmark_indices, _ = pairwise_distances_argmin_min(kmeans.cluster_centers_, x)
-
-        # Pre-calculate original distances between chosen landmark points
+        # --- 1. Setup Landmarks (FPS Approach) ---
+        # Replaces KMeans logic. FPS guarantees better geometric coverage.
+        landmark_indices = self.get_landmarks_fps(x, num_landmarks)
+        landmark_set = set(landmark_indices)  # For O(1) lookup later
         landmarks_x = x[landmark_indices]
 
         model = gp.Model("Simplified_Landmarks")
@@ -819,7 +846,7 @@ class DirectOptimization(BaseTransform):
         model.Params.TimeLimit = 900
 
         # 2. Variables
-        Z = model.addMVar((n, d), lb=self.xl - 1, ub=self.xu + 1, name="Z")
+        Z = model.addMVar((n, d), lb=self.xl, ub=self.xu, name="Z")
 
         # 3. Objective: Minimize ||Z - X||^2
         diff = Z - x
@@ -843,6 +870,8 @@ class DirectOptimization(BaseTransform):
         dist_X_landmarks_sq = np.sum((x[:, np.newaxis, :] - landmarks_x[np.newaxis, :, :]) ** 2, axis=-1)
 
         for i in range(n):
+            if i in landmark_set:
+                continue  # Skip landmarks themselves
             for m in range(num_landmarks):
                 idx_m = landmark_indices[m]
                 # dist between transformed point i and transformed landmark m
@@ -887,7 +916,7 @@ class DirectOptimization(BaseTransform):
         n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
 
         # Decision Variables: The counterfactual points themselves
-        Z_delta = cp.Variable((n, d))
+        Z_delta = cp.Variable(d)
         Z = x + Z_delta
 
         # Objective: Minimize Sum of Squared Euclidean Distances
