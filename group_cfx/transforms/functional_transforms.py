@@ -877,3 +877,45 @@ class DirectOptimization(BaseTransform):
             # If SolCount is 0, no feasible solution was found within the time/constraints
         print("No feasible solution found.")
         return None
+
+    def cvxpy_pushover(self, x: np.ndarray, model: sklearn.linear_model.LogisticRegression,
+                      y_prime, y_prime_confidence, solver=cp.MOSEK) -> cp.Problem:
+        """
+        Solves the Independent optimization problem using CVXPY.
+        Since points are independent, this vectorizes extremely efficiently.
+        """
+        n, d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
+
+        # Decision Variables: The counterfactual points themselves
+        Z_delta = cp.Variable((n, d))
+        Z = x + Z_delta
+
+        # Objective: Minimize Sum of Squared Euclidean Distances
+        # L2^2 = sum((Z - X)^2)
+        objective = cp.Minimize(cp.sum_squares(Z_delta))
+
+        # Constraints: Classification
+        constraints = []
+
+        # Vectorized classification constraint: Z @ w + b
+        logits = Z @ w_model.T + b_model
+
+        if y_prime == 1:
+            constraints.append(logits >= margin_logit)
+        else:
+            constraints.append(logits <= margin_logit)
+
+        # Solve
+        prob = cp.Problem(objective, constraints)
+
+        # CVXPY detects the diagonal structure and solves this very fast
+        prob.solve(solver=solver, verbose=False)
+
+        if prob.status != cp.OPTIMAL:
+            print(f"Warning: DirectOptimization CVXPY status: {prob.status}")
+
+        # Update parameters
+        with torch.no_grad():
+            self.X_prime.copy_(torch.tensor(Z.value, dtype=torch.float32))
+
+        return prob
