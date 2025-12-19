@@ -512,8 +512,8 @@ class DirectOptimization(BaseTransform):
     def pyomo_solving(self, x, model : sklearn.linear_model.LogisticRegression, y_prime, y_prime_confidence, K =1.1,
                       solver = 'mosek') -> float:
         # Call gurobipy solver to solve the non-convex problem
-        x = np.array(x)
-        return self.gurobi_solving_fast(x,model, y_prime, y_prime_confidence, K)
+        #return self.pyomo_solving_w_landmarks(x, model, y_prime, y_prime_confidence, K)
+        return self.gurobi_solving_landmarks(x,model, y_prime, y_prime_confidence, K)
         n,d, w_model, b_model, margin_logit = init_solving(x, model, y_prime, y_prime_confidence)
 
         #assert np.all(np.isfinite(x))
@@ -690,7 +690,8 @@ class DirectOptimization(BaseTransform):
         m.optimize()
 
         if m.SolCount > 0:
-            Z_opt = np.array([[Z[i, j].X for j in range(d)] for i in range(n)])
+            #Z_opt = np.array([[Z[i, j].X for j in range(d)] for i in range(n)])
+            Z_opt = Z.X
             # Update your torch tensor here
             with torch.no_grad():
                 self.X_prime.copy_(torch.tensor(Z_opt, dtype=torch.float32))
@@ -698,3 +699,184 @@ class DirectOptimization(BaseTransform):
         else:
             print("No solution found within time limit.")
             return None
+
+    def pyomo_solving_w_landmarks(self, x, model_lr, y_prime, y_prime_confidence, K=1.1, num_landmarks=None,
+                                        solver='gurobi'):
+        x = np.array(x)
+        n, d, w_model, b_model, margin_logit = init_solving(x, model_lr, y_prime, y_prime_confidence)
+
+        # Use sqrt(n) as the heuristic for O(n*sqrt(n)) complexity
+        if num_landmarks is None:
+            num_landmarks = int(np.sqrt(n))
+
+        # 1. Clustering for Landmark Definition
+        kmeans = KMeans(n_clusters=num_landmarks, random_state=0)
+        kmeans.fit(x)
+        landmarks_x = kmeans.cluster_centers_
+        # Map which indices belong to which landmark center
+        cluster_map = {m: np.where(kmeans.labels_ == m)[0] for m in range(num_landmarks)}
+
+        # Pre-calculate distances between every point X_i and every Landmark_j
+        dist_X_landmarks_sq = np.sum((x[:, np.newaxis, :] - landmarks_x[np.newaxis, :, :]) ** 2, axis=-1)
+
+        # Pre-calculate distances between landmarks themselves
+        dist_LX_sq = np.zeros((num_landmarks, num_landmarks))
+        for m1 in range(num_landmarks):
+            for m2 in range(num_landmarks):
+                dist_LX_sq[m1, m2] = np.sum((landmarks_x[m1] - landmarks_x[m2]) ** 2)
+
+        model = pyo.ConcreteModel()
+        model.N = pyo.RangeSet(0, n - 1)
+        model.D = pyo.RangeSet(0, d - 1)
+        model.M = pyo.RangeSet(0, num_landmarks - 1)
+
+        # Decision variables (The transformed points)
+        model.Z = pyo.Var(model.N, model.D, domain=pyo.Reals, bounds=[self.xl, self.xu])
+
+        # 2. DEFINING THE DEPENDENT LANDMARKS (L_z)
+        # These are not decision variables; they are the means of the Zs in each cluster.
+        def landmark_expr_rule(m, m_idx, d_idx):
+            indices = cluster_map[m_idx]
+            if len(indices) == 0: return 0.0  # Safety check
+            return sum(m.Z[i, d_idx] for i in indices) / len(indices)
+
+        model.LZ = pyo.Expression(model.M, model.D, rule=landmark_expr_rule)
+
+        # Objective: Minimize squared deviation (O(n))
+        model.obj = pyo.Objective(
+            expr=pyo.quicksum((model.Z[i, j] - x[i, j].item()) ** 2 for i in model.N for j in model.D),
+            sense=pyo.minimize
+        )
+
+        # 3. SKELETON CONSTRAINTS: O(m^2) which is O(n)
+        # This locks the relationship between centroids
+        def skeleton_rule(m, m1, m2):
+            if m1 >= m2: return pyo.Constraint.Skip
+            dist_LZ_sq = pyo.quicksum((m.LZ[m1, k] - m.LZ[m2, k]) ** 2 for k in range(d))
+
+            lower = (1.0 / K ** 2) * dist_LX_sq[m1, m2]
+            upper = (K ** 2) * dist_LX_sq[m1, m2]
+
+            return lower <= dist_LZ_sq and dist_LZ_sq <= upper
+
+        model.skeleton_con = pyo.Constraint(model.M, model.M, rule=skeleton_rule)
+
+        # 4. TRIANGULATION CONSTRAINTS: O(n * sqrt(n))
+        # This locks every point to every centroid to prevent local rotation/flip
+        def triangulation_rule_low(m, i, m_idx):
+            dist_Z_LZ = pyo.quicksum((m.Z[i, k] - m.LZ[m_idx, k]) ** 2 for k in range(d))
+            return dist_Z_LZ >= (1.0 / K ** 2) * dist_X_landmarks_sq[i, m_idx]
+
+        def triangulation_rule_up(m, i, m_idx):
+            dist_Z_LZ = pyo.quicksum((m.Z[i, k] - m.LZ[m_idx, k]) ** 2 for k in range(d))
+            return dist_Z_LZ <= (K ** 2) * dist_X_landmarks_sq[i, m_idx]
+
+        model.lip_tri_low = pyo.Constraint(model.N, model.M, rule=triangulation_rule_low)
+        model.lip_tri_up = pyo.Constraint(model.N, model.M, rule=triangulation_rule_up)
+
+        # 5. Classification Constraint (O(n))
+        def cls_rule(m, i):
+            logit = pyo.quicksum(w_model[j] * m.Z[i, j] for j in range(d)) + b_model
+            return logit >= margin_logit if y_prime == 1 else logit <= margin_logit
+
+        model.cls_con = pyo.Constraint(model.N, rule=cls_rule)
+
+        # Solver
+        solver_instance = pyo.SolverFactory(solver)
+        if solver == "gurobi":
+            solver_instance.options['NonConvex'] = 2
+            solver_instance.options['TimeLimit'] = 900
+
+        try :
+            result = solver_instance.solve(model, tee= True)
+        except ValueError as e:
+            return None
+
+        # Extract solution
+        Z_opt = np.array([[pyo.value(model.Z[i, j]) for j in range(d)] for i in range(n)])
+        with torch.no_grad():
+            self.X_prime.copy_(torch.tensor(Z_opt, dtype=torch.float32))
+        return result
+
+        return
+
+    def gurobi_solving_landmarks(self, x, model_lr, y_prime, y_prime_confidence, K=1.1, num_landmarks=None):
+        x = np.array(x)
+        n, d, w_model, b_model, margin_logit = init_solving(x, model_lr, y_prime, y_prime_confidence)
+        if num_landmarks is None: num_landmarks = int(np.sqrt(n))
+
+        # 1. Setup Data
+        kmeans = KMeans(n_clusters=num_landmarks, random_state=0)
+        kmeans.fit_transform(x)
+        landmarks_x = kmeans.cluster_centers_
+        cluster_labels = kmeans.labels_
+
+        env = gp.Env()
+        model = gp.Model("Bilinear_Landmarks", env=env)
+        model.Params.NonConvex = 2
+        model.Params.TimeLimit = 900
+
+        # 2. Variables
+        # Z is our n x d matrix of transformed points
+        Z = model.addMVar((n, d), lb=self.xl - 1, ub=self.xu + 1, name="Z")
+
+        # 3. Define Dependent Landmarks (Lz)
+        # Lz[m] = mean(Z[i] for i in cluster m)
+        # We use a linear transformation matrix M (num_landmarks x n) to compute means
+        M_data = np.zeros((num_landmarks, n))
+        for m in range(num_landmarks):
+            indices = np.where(cluster_labels == m)[0]
+            M_data[m, indices] = 1.0 / len(indices)
+
+        # LZ = M @ Z (This is a matrix multiplication defining the centroids)
+        LZ = M_data @ Z
+
+        # 4. Objective: Minimize ||Z - X||^2
+        diff = Z - x
+        model.setObjective((diff * diff).sum(), GRB.MINIMIZE)
+
+        # 5. Skeleton Constraints: O(m^2)
+        # dist(LZ[m1], LZ[m2])^2 in [dist_x/K^2, dist_x*K^2]
+        for m1 in range(num_landmarks):
+            for m2 in range(m1 + 1, num_landmarks):
+                dist_x_sq = np.sum((landmarks_x[m1] - landmarks_x[m2]) ** 2)
+                # Row-based indexing of the MVar expression
+                dist_z_sq = gp.quicksum((LZ[m1, k] - LZ[m2, k]) ** 2 for k in range(d))
+                model.addConstr(dist_z_sq >= (1.0 / K ** 2) * dist_x_sq)
+                model.addConstr(dist_z_sq <= (K ** 2) * dist_x_sq)
+
+        # 6. Triangulation Constraints: O(n * m)
+        # dist(Z[i], LZ[m])^2
+        dist_X_landmarks_sq = np.sum((x[:, np.newaxis, :] - landmarks_x[np.newaxis, :, :]) ** 2, axis=-1)
+        for i in range(n):
+            for m in range(num_landmarks):
+                dist_z_lz_sq = gp.quicksum((Z[i, k] - LZ[m, k]) ** 2 for k in range(d))
+                model.addConstr(dist_z_lz_sq >= (1.0 / K ** 2) * dist_X_landmarks_sq[i, m])
+                model.addConstr(dist_z_lz_sq <= (K ** 2) * dist_X_landmarks_sq[i, m])
+
+        # 7. Classification: O(n)
+        logits = Z @ w_model + b_model
+        if y_prime == 1:
+            model.addConstr(logits >= margin_logit)
+        else:
+            model.addConstr(logits <= margin_logit)
+
+        model.optimize()
+
+        # Check if at least one feasible solution was found
+        if model.SolCount > 0:
+            if model.Status == GRB.OPTIMAL:
+                print("Optimal solution found.")
+            elif model.Status == GRB.TIME_LIMIT:
+                print("Time limit reached; returning best feasible solution found.")
+            else:
+                print(f"Solver stopped with status {model.Status}; returning feasible solution.")
+
+            # Copy info of Z.X to the tensor self.X_prime
+            with torch.no_grad():
+                self.X_prime.copy_(torch.tensor(Z.X, dtype=torch.float32))
+            return model.ObjVal
+
+            # If SolCount is 0, no feasible solution was found within the time/constraints
+        print("No feasible solution found.")
+        return None
