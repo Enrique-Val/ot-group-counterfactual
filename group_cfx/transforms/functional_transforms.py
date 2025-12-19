@@ -4,6 +4,7 @@
 import numpy as np
 import sklearn
 import torch
+from sklearn.cluster import KMeans
 from torch import nn
 import cvxpy as cp
 import pyomo.environ as pyo
