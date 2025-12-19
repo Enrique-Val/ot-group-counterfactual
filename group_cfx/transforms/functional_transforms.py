@@ -5,6 +5,7 @@ import numpy as np
 import sklearn
 import torch
 from sklearn.cluster import KMeans
+from sklearn.metrics import pairwise_distances_argmin_min
 from torch import nn
 import cvxpy as cp
 import pyomo.environ as pyo
@@ -806,56 +807,51 @@ class DirectOptimization(BaseTransform):
         n, d, w_model, b_model, margin_logit = init_solving(x, model_lr, y_prime, y_prime_confidence)
         if num_landmarks is None: num_landmarks = int(np.sqrt(n))
 
-        # 1. Setup Data
-        kmeans = KMeans(n_clusters=num_landmarks, random_state=0)
-        kmeans.fit_transform(x)
-        landmarks_x = kmeans.cluster_centers_
-        cluster_labels = kmeans.labels_
+        # 1. Setup Landmarks (Real point indices)
+        kmeans = KMeans(n_clusters=num_landmarks, random_state=0).fit(x)
+        landmark_indices, _ = pairwise_distances_argmin_min(kmeans.cluster_centers_, x)
 
-        env = gp.Env()
-        model = gp.Model("Bilinear_Landmarks", env=env)
+        # Pre-calculate original distances between chosen landmark points
+        landmarks_x = x[landmark_indices]
+
+        model = gp.Model("Simplified_Landmarks")
         model.Params.NonConvex = 2
         model.Params.TimeLimit = 900
 
         # 2. Variables
-        # Z is our n x d matrix of transformed points
         Z = model.addMVar((n, d), lb=self.xl - 1, ub=self.xu + 1, name="Z")
 
-        # 3. Define Dependent Landmarks (Lz)
-        # Lz[m] = mean(Z[i] for i in cluster m)
-        # We use a linear transformation matrix M (num_landmarks x n) to compute means
-        M_data = np.zeros((num_landmarks, n))
-        for m in range(num_landmarks):
-            indices = np.where(cluster_labels == m)[0]
-            M_data[m, indices] = 1.0 / len(indices)
-
-        # LZ = M @ Z (This is a matrix multiplication defining the centroids)
-        LZ = M_data @ Z
-
-        # 4. Objective: Minimize ||Z - X||^2
+        # 3. Objective: Minimize ||Z - X||^2
         diff = Z - x
         model.setObjective((diff * diff).sum(), GRB.MINIMIZE)
 
-        # 5. Skeleton Constraints: O(m^2)
-        # dist(LZ[m1], LZ[m2])^2 in [dist_x/K^2, dist_x*K^2]
+        # 4. Skeleton Constraints: Between Landmarks
         for m1 in range(num_landmarks):
+            idx1 = landmark_indices[m1]
             for m2 in range(m1 + 1, num_landmarks):
-                dist_x_sq = np.sum((landmarks_x[m1] - landmarks_x[m2]) ** 2)
-                # Row-based indexing of the MVar expression
-                dist_z_sq = gp.quicksum((LZ[m1, k] - LZ[m2, k]) ** 2 for k in range(d))
+                idx2 = landmark_indices[m2]
+                dist_x_sq = np.sum((x[idx1] - x[idx2]) ** 2)
+
+                # Now comparing Z[idx1] directly to Z[idx2]
+                dist_z_sq = gp.quicksum((Z[idx1, k] - Z[idx2, k]) ** 2 for k in range(d))
+
                 model.addConstr(dist_z_sq >= (1.0 / K ** 2) * dist_x_sq)
                 model.addConstr(dist_z_sq <= (K ** 2) * dist_x_sq)
 
-        # 6. Triangulation Constraints: O(n * m)
-        # dist(Z[i], LZ[m])^2
+        # 5. Triangulation Constraints: Every point to its "Anchors"
+        # Pre-calculate distance from every x_i to every chosen landmark_x_m
         dist_X_landmarks_sq = np.sum((x[:, np.newaxis, :] - landmarks_x[np.newaxis, :, :]) ** 2, axis=-1)
+
         for i in range(n):
             for m in range(num_landmarks):
-                dist_z_lz_sq = gp.quicksum((Z[i, k] - LZ[m, k]) ** 2 for k in range(d))
+                idx_m = landmark_indices[m]
+                # dist between transformed point i and transformed landmark m
+                dist_z_lz_sq = gp.quicksum((Z[i, k] - Z[idx_m, k]) ** 2 for k in range(d))
+
                 model.addConstr(dist_z_lz_sq >= (1.0 / K ** 2) * dist_X_landmarks_sq[i, m])
                 model.addConstr(dist_z_lz_sq <= (K ** 2) * dist_X_landmarks_sq[i, m])
 
-        # 7. Classification: O(n)
+        # 6. Classification
         logits = Z @ w_model + b_model
         if y_prime == 1:
             model.addConstr(logits >= margin_logit)
