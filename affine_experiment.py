@@ -45,7 +45,7 @@ if __name__ == "__main__":
                         choices=['FullAffine', 'FullAffine_proxy', 'PSDAffine', 'PSDAffine_proxy', 'DiagonalAffine',
                                  'DirectOptimization', 'Wachter', 'DirectOptimization_nb',
                                  'GaussianCommutativeTransform', 'GaussianTransform', 'GaussianTransform_proxy', 'GaussianScaleTransform',
-                                 'GMMForwardTransform'])
+                                 'GMMForwardTransform', "GMMForwardTransform_full"])
     parser.add_argument('--math_opt', action='store_true', help='Use mathematical optimization')
     parser.add_argument('--only_train', action='store_true', help='Only train the classifier and density estimator')
     args = parser.parse_args()

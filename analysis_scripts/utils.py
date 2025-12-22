@@ -230,17 +230,19 @@ def plot_performance_profile(df, metric, title=None, ax=None, palette=None, max_
 
 renaming = {"DiagonalAffine" : "Diag. \n affine", "GaussianCommutativeTransform" : "Comm. \n Gaussian",
                 "GaussianTransform" : "Any \n Gaussian", "PSDAffine" : "PSD \n affine", "GMMForwardTransform" : "3-GMM",
-                "DirectOptimization" : "Baseline", "FullAffine" : "Any \n affine",
-             "GaussianScaleTransform" : "Scaled \n Gaussian"}
+                "DirectOptimization" : "Group w/ \n Bilipschitz", "FullAffine" : "Any \n affine",
+             "GaussianScaleTransform" : "Scaled \n Gaussian",
+            "DirectOptimization_nb" : "Group w/ \n Lipschitz", "Wachter" : "Wachter" }
 
-plot_order = ["Baseline", "PSD \n affine", "Diag. \n affine", "Any \n Gaussian", "Comm. \n Gaussian", "Scaled \n Gaussian" , "3-GMM"]
+plot_order = ["Wachter", "Group w/ \n Lipschitz", "Group w/ \n Bilipschitz", "PSD \n affine", "Diag. \n affine", "Any \n Gaussian", "Comm. \n Gaussian", "Scaled \n Gaussian" , "3-GMM"]
 
 renaming_nb = {"DiagonalAffine" : "Diag. affine", "GaussianCommutativeTransform" : "Comm. Gaussian",
                 "GaussianTransform" : "Any Gaussian", "PSDAffine" : "PSD affine", "GMMForwardTransform" : "3-GMM",
-                "DirectOptimization" : "Baseline", "FullAffine" : "Any affine",
-                "GaussianScaleTransform" : "Scaled Gaussian"}
+                "DirectOptimization" : "Group w/ Bilipschitz", "FullAffine" : "Any affine",
+                "GaussianScaleTransform" : "Scaled Gaussian",
+               "DirectOptimization_nb": "Group w/ Lipschitz", "Wachter": "Wachter"}
 
-plot_order_bn = ["Baseline", "PSD affine", "Diag. affine", "Any Gaussian", "Comm. Gaussian", "Scaled Gaussian" , "3-GMM"]
+plot_order_bn = ["Wachter", "Group w/ Lipschitz", "Group w/ Bilipschitz", "PSD affine", "Diag. affine", "Any Gaussian", "Comm. Gaussian", "Scaled Gaussian" , "3-GMM"]
 
 renaming = renaming_nb
 plot_order = plot_order_bn

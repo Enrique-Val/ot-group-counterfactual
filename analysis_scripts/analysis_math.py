@@ -87,7 +87,7 @@ if __name__ == "__main__":
         os.makedirs(plots_dir)
 
     datasets, transforms, label_clusters = list_params(root_dir, n_clusters=n_clusters, exp_type="math_opt")
-    datasets = datasets[:-1]
+    #datasets = datasets[:-1]
     print(datasets)
     print(transforms)
     print(label_clusters)
@@ -100,29 +100,51 @@ if __name__ == "__main__":
                 if df is None:
                     raise ValueError(f"Missing data for dataset {dataset}, transform {transform}, label_cluster {label_cluster_i}")
                 df.set_index(df.columns[0], inplace=True)
+                # Create two new metrics: Distortion and Distortion test
+                df["Distortion"] = 1 -np.min([df["Empirical lower bound"],(1/ df["Empirical upper bound"])], axis=0)
+                df["Distortion test"] = 1 -np.min([df["Empirical lower bound test"], (1/ df["Empirical upper bound test"])], axis=0)
+                # Remove last two Ks
+                df = df.iloc[:-2, :]
                 results[dataset][transform][label_cluster_i] = df
+
 
     # 2. GENERATE RAW & NORMALIZED DATA
     records_raw = []
     records_norm = []
-    records_anchored = []
 
-    baseline_broken_count = 0
+    # If the ws distance for a method is NaN or too large, we consider the entire experiment broken
+    WASS_THRESH = 1000
+    broken_count = pd.Series(data=0, index=transforms)
 
     for dataset in datasets:
         for label_cluster_i in label_clusters:
             # Get Baseline Data
-            base_df = results[dataset]["DirectOptimization"][label_cluster_i]
-            base_time = base_df["Time"]
-            base_ws = base_df["Wasserstein test"]
+            Ks = results[dataset]["Wachter"][label_cluster_i].index
+            base_df = results[dataset]["Wachter"][label_cluster_i].iloc[0]  # First rwo, they are all the same
 
-            WASS_THRESH = 1000
+            # Mask for K values where a method failed
+            bad_ws_mask = pd.Series(data=False, index=Ks)
 
-            bad_ws_mask = (base_ws.isna()) | (base_ws > WASS_THRESH)
-            baseline_broken_count += bad_ws_mask.sum()
+            # Count instances being NaN or too large
+            for transform in transforms:
+                df = results[dataset][transform][label_cluster_i]
+                base_ws = df["Wasserstein test"]
+                bad_ws_mask_t = (base_ws.isna()) | (base_ws > WASS_THRESH)
+                n_broken = bad_ws_mask_t.sum()
+                broken_count[transform] += n_broken
+                bad_ws_mask = bad_ws_mask | bad_ws_mask_t  # Union of bad masks
 
             for transform in transforms:
                 df = results[dataset][transform][label_cluster_i]
+                # Create a copy for normalization
+                df_norm = df.copy()
+
+                # Change nans to infinite for time metric (or 0 if column is Empirical lower bound, Empirical lower bound test or Validity test)
+                for col in df.columns:
+                    if "Empirical lower bound" in col or "Validity test" in col or "Distortion" in col:
+                        df[col] = df[col].fillna(0)
+                    else:
+                        df[col] = df[col].fillna(np.inf)
 
                 # --- PATH A: RAW DATA (Includes Baseline) ---
                 # We save everything, including DirectOptimization
@@ -133,48 +155,18 @@ if __name__ == "__main__":
                 df_long["K"] = df_long.index
                 records_raw.append(df_long.reset_index(drop=True))
 
-                # --- PATH B: ANCHORED DATA (New Logic) ---
-                # 1. Get the Anchor Value safely (Baseline at largest K)
-                anchor_idx = base_ws.index.max()
-                anchor_val = base_ws.loc[anchor_idx]
-                anchor_time = base_time.loc[anchor_idx]
-
-                # 2. Check Anchor Validity (The "Gatekeeper")
-                # If the anchor is NaN or > Threshold, we DROP this entire anchored experiment
-                is_anchor_valid = not (pd.isna(anchor_val) or anchor_val > WASS_THRESH)
-
-                if is_anchor_valid:
-                    df_anchor = df.copy()
-
-                    # Normalize everything by the SCALAR anchor value
-                    df_anchor["Wasserstein test"] = df["Wasserstein test"] / anchor_val
-                    df_anchor["Time"] = df["Time"] / anchor_time
-
-                    # We apply the bad_ws_mask from the baseline to the anchored data as well
-                    df_anchor.loc[bad_ws_mask, "Wasserstein test"] = np.nan
-                    df_anchor.loc[bad_ws_mask, "Wasserstein"] = np.nan
-
-                    df_anchor_long = df_anchor.melt(ignore_index=False, var_name="metric", value_name="value")
-                    df_anchor_long["dataset"] = dataset
-                    df_anchor_long["transform"] = transform
-                    df_anchor_long["label_cluster"] = str(label_cluster_i)
-                    df_anchor_long["K"] = df_anchor_long.index
-                    records_anchored.append(df_anchor_long.reset_index(drop=True))
-
-                # --- PATH C: NORMALIZED DATA (Excludes Baseline) ---
-                if transform == "DirectOptimization":
+                # --- PATH B: NORMALIZED DATA (Excludes Baseline) ---
+                # IMPORTANT: We remove experiments where ANY method fails. We have a counter for that above.
+                if transform == "Wachter":
                     continue  # Skip baseline (Ratio=1.0 is redundant information)
-
-                # Create a copy for normalization
-                df_norm = df.copy()
 
                 # Direct Vectorized Division (Fast & Clean)
                 # Since indices match exactly, pandas divides row-by-row automatically
-                df_norm["Wasserstein test"] = df["Wasserstein test"] / base_ws
-                df_norm["Time"] = df["Time"] / base_time
+                for metric in df.columns:
+                    df_norm[metric] = df[metric] / base_df[metric]
 
-                df_norm.loc[bad_ws_mask, "Wasserstein test"] = np.nan
-                df_norm.loc[bad_ws_mask, "Wasserstein"] = np.nan
+                # Drop rows with bad ws
+                df_norm = df_norm[~bad_ws_mask]
 
                 # Melt and Store
                 df_norm_long = df_norm.melt(ignore_index=False, var_name="metric", value_name="value")
@@ -185,24 +177,22 @@ if __name__ == "__main__":
                 records_norm.append(df_norm_long.reset_index(drop=True))
 
 
-    print(f"Total of {baseline_broken_count} instances where baseline Wasserstein was NaN or > {WASS_THRESH}")
+    print(f"Total of {broken_count} instances where baseline Wasserstein was NaN or > {WASS_THRESH}")
     print(f"Total instances processed: {len(records_norm)}")
 
     # 3. CONCATENATE
     all_df_raw = pd.concat(records_raw, ignore_index=True)
     all_df_norm = pd.concat(records_norm, ignore_index=True)
-    all_df_anchored = pd.concat(records_anchored, ignore_index=True)
 
 
     # Rename transforms
     all_df_raw["transform"] = all_df_raw["transform"].replace(renaming)
     all_df_norm["transform"] = all_df_norm["transform"].replace(renaming)
-    all_df_anchored["transform"] = all_df_anchored["transform"].replace(renaming)
 
     actual_plot_order = [i for i in plot_order if i in all_df_raw["transform"].unique()]
 
     # make one boxplot per metric
-    for metric in all_df_norm["metric"].unique():
+    '''for metric in all_df_norm["metric"].unique():
         fig = plt.figure(figsize=fig_size)
         ax = fig.gca()
         ax.grid(True)
@@ -222,8 +212,8 @@ if __name__ == "__main__":
         #ax.set_title(f"{metric}")
         n = len(subset[subset["transform"] == plot_order[0]])
         # Write the number of samples per box at the top of the plot
-        '''ax.text(0.5, 1 * np.quantile(subset["value"],0.9), "n = " + str(n), horizontalalignment='center',
-                      verticalalignment='center', fontsize=10)'''
+        ax.text(0.5, 1 * np.quantile(subset["value"],0.9), "n = " + str(n), horizontalalignment='center',
+                      verticalalignment='center', fontsize=10)
         ax.set_xlabel("Transform")
         ax.set_ylabel(metric)
         #ax.set_xlabel("")
@@ -232,10 +222,13 @@ if __name__ == "__main__":
         plot_path = os.path.join(plots_dir, f"boxplot_{metric.replace(' ','_')}.pdf")
         fig.tight_layout()
         fig.savefig(plot_path, bbox_inches="tight")
-        fig.show()
+        fig.show()'''
 
     # Filter for just the Wasserstein metrics
     wass_df = all_df_norm[all_df_norm["metric"].str.contains("Wasserstein")]
+
+    # Filter out for Group (exclude these)
+    wass_df = wass_df[~wass_df["transform"].str.contains("Group")]
 
     plt.figure(figsize=(12, 6))
     sns.boxplot(
@@ -244,7 +237,8 @@ if __name__ == "__main__":
         y="value",
         hue="metric",  # This splits the box into Train (Blue) and Test (Orange)
         palette="muted",
-        showfliers=False
+        showfliers=False,
+        order=actual_plot_order[3:],  # Exclude baseline
     )
     plt.axhline(1.0, color='red', linestyle='--', label="Baseline Reference")
     plt.yscale("log")
@@ -259,7 +253,7 @@ if __name__ == "__main__":
     fig = plt.figure(figsize=fs)
     ax = fig.gca()
     # Plot Time Profile
-    plot_performance_profile(all_df_raw, "Wasserstein test", ax=ax, palette=palette, max_x=5, verbose=True)
+    plot_performance_profile(all_df_raw, "Wasserstein test", ax=ax, palette=palette, max_x=7, verbose=True)
     fig.tight_layout()
     plot_path = os.path.join(plots_dir, f"performance_profile_Wasserstein_test.pdf")
     fig.savefig(plot_path, bbox_inches="tight")
@@ -268,21 +262,30 @@ if __name__ == "__main__":
     fig = plt.figure(figsize=fs)
     ax = fig.gca()
     # Plot Time Profile
-    plot_performance_profile(all_df_raw, "Time", ax=ax, palette=palette, max_x=100)
+    plot_performance_profile(all_df_raw, "Exec time", ax=ax, palette=palette, max_x=1e5)
     fig.tight_layout()
     plot_path = os.path.join(plots_dir, f"performance_profile_Time.pdf")
     fig.savefig(plot_path, bbox_inches="tight")
     fig.show()
 
     # Lineplot. K is the x-axis, transform is hue, value is y-axis
-    for metric in all_df_anchored["metric"].unique()[1:]:
+    for metric in all_df_norm["metric"].unique():
         fig = plt.figure(figsize=fig_size*1.2)
         ax = fig.gca()
         ax.grid(True)
-        subset = all_df_anchored[all_df_anchored["metric"] == metric]
+        if "Wasserstein" in metric or "Time" in metric or True:
+            subset = all_df_norm[all_df_norm["metric"] == metric]
+            # Filter out Wachter
+            subset = subset[subset["transform"] != "Wachter"]
+            # Horizontal line at y=1, named Wachter
+            ax.axhline(1.0, color=palette["Wachter"], linestyle='--', label="Wachter")
+            lp_plot_order = actual_plot_order[1:]  # Exclude Wachter
+        else :
+            subset = all_df_raw[all_df_raw["metric"] == metric]
+            lp_plot_order = actual_plot_order
         sns.lineplot(data=subset, x="K", y="value", hue="transform",
                      palette=palette,
-                     hue_order=actual_plot_order,
+                     hue_order=lp_plot_order,
                      marker="o",
                      ax=ax,
                      estimator="median")

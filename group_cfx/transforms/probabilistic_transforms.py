@@ -288,9 +288,10 @@ class GMMForwardTransform(ProbabilisticTransform) :
             else:
                 constraints.append(logits_expr <= margin_logit)
 
-            # Bilipschitz constraints on covariance ratio
-            #constraints.append(A >> (1 / K) * np.eye(d))
-            #constraints.append(A << K * np.eye(d))
+            # Bilipschitz constraints on individual As
+            constraints.append(A >> (1 / K) * np.eye(d))
+            constraints.append(A << K * np.eye(d))
+
         objective = cp.Minimize(cp.sum(objective_list))
 
         A_mean = sum([np.exp(self.log_weights[j]) * A_list[j] for j in range(self.n_components)])
