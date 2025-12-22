@@ -211,8 +211,16 @@ class GMMForwardTransform(ProbabilisticTransform) :
         A_mean = torch.zeros_like(self.A[0])
         weights_prior = np.exp(torch.tensor(self.log_weights))
         weights_prior /= weights_prior.sum()
+        lipschitz_list = []
         for i in range(self.n_components):
             A_mean += weights_prior[i] * self.A[i]
+            with torch.no_grad():
+                s, _ = torch.linalg.eigh(self.A[i])
+                s = torch.sqrt(torch.clamp(s, 0.0))
+                lipschitz_upper = s.max().item()
+                lipschitz_lower = s.min().item()
+                lipschitz = np.min([1 / lipschitz_upper, lipschitz_lower])
+                lipschitz_list.append(lipschitz)
         # Compute spectral norm of A_mean (A is symmetric PSD)
         sym_A = 0.5 * (A_mean + A_mean.T)
         with torch.no_grad():
@@ -221,7 +229,8 @@ class GMMForwardTransform(ProbabilisticTransform) :
             lipschitz_upper = s.max().item()
             lipschitz_lower = s.min().item()
             lipschitz = np.min([1 / lipschitz_upper, lipschitz_lower])
-        return 1 - lipschitz
+            lipschitz_list.append(lipschitz)
+        return 1 - np.min(lipschitz_list)
 
         '''if X_orig is None:
             # Compute the bi-Lipschitz metric by sampling from the joint distribution
