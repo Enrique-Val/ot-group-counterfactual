@@ -20,7 +20,18 @@ import psutil
 
 import joblib
 
+import pybnesian as pb
+
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+
+def train_bn(X, blacklist=[]):
+    test = pb.MutualInformation(df=X)
+    est = pb.PC()
+    cpdag = est.estimate(hypot_test=test, arc_blacklist=blacklist)
+    dag = cpdag.to_dag()
+    bn = pb.BayesianNetwork(pb.GaussianNetworkType(), dag)
+    bn.fit(X)
+    return bn
 
 def print_mem(prefix=""):
     process = psutil.Process(os.getpid())
@@ -48,7 +59,7 @@ def plot_bn_structure(bn, title="", filename=None):
     for node in bn.nodes():
         if node == "K":
             colors.append("lightcoral")
-        elif node.endswith("_prime"):
+        elif node.endswith("\'"):
             colors.append("lightgreen")
         else:
             colors.append("skyblue")
@@ -175,7 +186,7 @@ if __name__ == "__main__":
         X_sub = np.vstack([X_sub, jittered_samples])
 
     # Confidence for y_prime
-    y_prime_conf = 0.9
+    y_prime_conf = 0.8
 
     # ============================
     # Step 5: Solve and analyse
@@ -190,7 +201,7 @@ if __name__ == "__main__":
 
     if args.math_opt:
         X_global = []
-        for K in [1.1,2,5,7.5,10,12.5,15] :
+        for K in [1.01,1.5,2.0, 3.5,5.0]:
             transform.cvxpy_solving(X_sub, f, y_prime, y_prime_confidence=y_prime_conf, K=K)
             X_prime_t = transform(X_sub_tensor)
             # Stach horizontall X_sub and X_prime_t
@@ -253,17 +264,20 @@ if __name__ == "__main__":
     for i in range(d):
         columns.append(f"x{i+1}")
     for i in range(d):
-        columns.append(f"x{i+1}_prime")
+        columns.append(f"x{i+1}\'")
     columns.append("K")
 
     X_global = pd.DataFrame(X_global, columns=columns)
+    # Log transform K to log scale
+    #X_global["K"] = np.log(X_global["K"]-1)
+    # Min max scale each column to [0,1]
+    for col in X_global.columns:
+        continue
+        X_global[col] = (X_global[col] - X_global[col].min()) / (X_global[col].max() - X_global[col].min())
 
     # Make it differential. The values of X_prime should be X_prime - X
     for i in range(d):
-        X_global[f"x{i+1}_prime"] = X_global[f"x{i+1}_prime"] - X_global[f"x{i+1}"]
-
-    # Train pybnesian
-    import pybnesian as pb
+        X_global[f"x{i+1}\'"] = X_global[f"x{i+1}\'"]# - X_global[f"x{i+1}"]
 
     # First, define blacklist of edges to avoid
     #Bilipschitz cannot go into original features
@@ -274,23 +288,22 @@ if __name__ == "__main__":
     # Transformed features cannot go into original features
     for i in range(d):
         for j in range(d):
-            blacklist.append((f"x{i+1}_prime", f"x{j+1}"))
+            blacklist.append((f"x{i+1}\'", f"x{j+1}"))
 
     # No nodes can go into bilipschitz
     for i in range(d):
         blacklist.append((f"x{i+1}", "K"))
-        blacklist.append((f"x{i+1}_prime", "K"))
+        blacklist.append((f"x{i+1}\'", "K"))
 
-    bn = pb.hc(X_global, bn_type = pb.GaussianNetworkType(), score = 'bic', operators=["arcs"],
-               arc_blacklist=blacklist)
-    bn.fit(X_global)
+    bn = train_bn(X_global, blacklist=blacklist)
 
     plot_bn_structure(bn)
 
     # Print cpts of prime nodes:
     print("--------------------------------")
+    print("FOR BN WITH PRIME-PRIME EDGES:")
     for node in bn.nodes():
-        if node.endswith("_prime"):
+        if node.endswith("\'"):
             cpt = bn.cpd(node)
             print(f"CPT for node {node}:")
             print(cpt)
@@ -301,77 +314,21 @@ if __name__ == "__main__":
     for i in range(d):
         for j in range(d):
             if i != j:
-                blacklist.append((f"x{i+1}_prime", f"x{j+1}_prime"))
+                blacklist.append((f"x{i+1}\'", f"x{j+1}\'"))
 
-    bn2 = pb.hc(X_global, bn_type = pb.GaussianNetworkType(), score = 'bic', operators=["arcs"],
-               arc_blacklist=blacklist)
-    bn2.fit(X_global)
+    bn2 = train_bn(X_global, blacklist=blacklist)
 
     # Extract graph and plot it
     plot_bn_structure(bn2, filename=os.path.join(data_path, f"bn_structure_label_{y_orig}_cluster_{cluster_id}.pdf"))
 
     # Print cpts of prime nodes:
     print("--------------------------------")
+    print("FOR BN WITH NO PRIME-PRIME EDGES:")
     for node in bn2.nodes():
-        if node.endswith("_prime"):
+        if node.endswith("\'"):
             cpt = bn2.cpd(node)
             print(f"CPT for node {node}:")
             print(cpt)
     print("--------------------------------")
-
-
-    # A third BN with the differential of input and primes
-    df3 = X_global.copy()
-    for i in range(d):
-        df3[f"x{i+1}"] = df3[f"x{i+1}_prime"] - df3[f"x{i+1}"]
-    # Drop original features
-    for i in range(d):
-        df3 = df3.drop(columns=[f"x{i+1}_prime"])
-    # Blacklist only prime to bilip
-    blacklist3 = []
-    for i in range(d):
-        blacklist3.append((f"x{i+1}", "K"))
-    bn3 = pb.hc(df3, bn_type = pb.GaussianNetworkType(), score = 'bic', operators=["arcs"],
-               arc_blacklist=blacklist3)
-    bn3.fit(df3)
-
-    # Extract graph and plot it
-    plot_bn_structure(bn3)
-
-    # Print cpts of prime nodes:
-    print("--------------------------------")
-    for node in bn3.nodes():
-        cpt = bn3.cpd(node)
-        print(f"CPT for node {node}:")
-        print(cpt)
-    print("--------------------------------")
-
-    '''# A fourth BN, adding to the blacklist edges from diff to diff
-    blacklist4 = blacklist3.copy()
-    for i in range(d):
-        for j in range(d):
-            if i != j:
-                blacklist4.append((f"x{i+1}_diff", f"x{j+1}_diff"))
-    bn4 = pb.hc(df3, bn_type = pb.GaussianNetworkType(), score = 'bic', operators=["arcs"],
-                arc_blacklist=blacklist4)
-    bn4.fit(df3)
-
-    # Extract graph and plot it
-    G4, pos4 = get_structure(bn4, bn4.nodes(), bn4.arcs())
-    plt.figure(figsize=(12, 8))
-    nx.draw(G4, pos4, with_labels=True, node_size=2000,
-            node_color='orange', font_size=10, font_weight='bold', arrowsize=20
-            )
-    plt.title(f"Learned Bayesian Network Structure (only diffs and bilip, no diff-diff edges) for label {y_orig}, cluster {cluster_id}")
-    plt.show()
-
-    # Print cpts of prime nodes:
-    print("--------------------------------")
-    for node in bn4.nodes():
-        if node.endswith("_diff"):
-            cpt = bn4.cpd(node)
-            print(f"CPT for node {node}:")
-            print(cpt)
-    print("--------------------------------")'''
 
     print("Total exec time:", time.time() - t0)

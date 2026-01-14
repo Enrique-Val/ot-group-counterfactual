@@ -1,4 +1,5 @@
 import os
+from itertools import product
 
 import numpy as np
 import pandas as pd
@@ -21,6 +22,8 @@ def run_friedman_by_K(all_df, correct="bergmann", palette = None):
     """
     results = {}
     for metric in all_df["metric"].unique():
+        if "test" not in metric:
+            continue  # Only test metrics
         fig, axes = plt.subplots(figsize=(12, 8), nrows=3, ncols=2)
         for i,K_val in enumerate(sorted(all_df["K"].unique())):
             subset = all_df[(all_df["metric"] == metric) & (all_df["K"] == K_val)]
@@ -76,6 +79,8 @@ def run_friedman_by_K(all_df, correct="bergmann", palette = None):
         )
         ax.set_title(f"{metric}  (all K)")
         fig.tight_layout()
+        plot_path = os.path.join(plots_dir, f"friedman_cd_{metric.replace(' ','_')}.pdf")
+        fig.savefig(plot_path, bbox_inches="tight")
         fig.show()
 
     return results
@@ -87,7 +92,7 @@ if __name__ == "__main__":
         os.makedirs(plots_dir)
 
     datasets, transforms, label_clusters = list_params(root_dir, n_clusters=n_clusters, exp_type="math_opt")
-    #datasets = datasets[:-1]
+    datasets = datasets[1:]  # Exclude synthetic
     print(datasets)
     print(transforms)
     print(label_clusters)
@@ -111,6 +116,13 @@ if __name__ == "__main__":
     # 2. GENERATE RAW & NORMALIZED DATA
     records_raw = []
     records_norm = []
+
+    # Compute median metrics for Wachter
+    all_Wachter_series = []
+    for dataset, label_cluster_i in product(datasets, label_clusters):
+        df = results[dataset]["Wachter"][label_cluster_i].iloc[0]  # First row, they are all the same
+        all_Wachter_series.append(df)
+    median_Wachter = pd.concat(all_Wachter_series, axis=1).median(axis=1)
 
     # If the ws distance for a method is NaN or too large, we consider the entire experiment broken
     WASS_THRESH = 1000
@@ -162,8 +174,10 @@ if __name__ == "__main__":
 
                 # Direct Vectorized Division (Fast & Clean)
                 # Since indices match exactly, pandas divides row-by-row automatically
+                # remove inter-subject variability while maintaining interpretability
                 for metric in df.columns:
-                    df_norm[metric] = df[metric] / base_df[metric]
+                    continue
+                    df_norm[metric] = df[metric] / base_df[metric] * median_Wachter[metric]
 
                 # Drop rows with bad ws
                 df_norm = df_norm[~bad_ws_mask]
@@ -268,17 +282,23 @@ if __name__ == "__main__":
     fig.savefig(plot_path, bbox_inches="tight")
     fig.show()
 
+    LOWER_BOUND = "Empirical lower bound test"
+    UPPER_BOUND = "Empirical upper bound test"
+    bound_metrics = [LOWER_BOUND, UPPER_BOUND]
+
     # Lineplot. K is the x-axis, transform is hue, value is y-axis
     for metric in all_df_norm["metric"].unique():
         fig = plt.figure(figsize=fig_size*1.2)
         ax = fig.gca()
         ax.grid(True)
-        if "Wasserstein" in metric or "Time" in metric or True:
+        if "test" not in metric or "bound" in metric:
+            continue  # Only plot test metrics
+        if "Wasserstein" in metric or "Time" in metric or True :
             subset = all_df_norm[all_df_norm["metric"] == metric]
             # Filter out Wachter
             subset = subset[subset["transform"] != "Wachter"]
             # Horizontal line at y=1, named Wachter
-            ax.axhline(1.0, color=palette["Wachter"], linestyle='--', label="Wachter")
+            ax.axhline(median_Wachter[metric], color=palette["Wachter"], linestyle='--', label="Wachter")
             lp_plot_order = actual_plot_order[1:]  # Exclude Wachter
         else :
             subset = all_df_raw[all_df_raw["metric"] == metric]
@@ -292,13 +312,80 @@ if __name__ == "__main__":
         if metric == "Time":
             ax.set_yscale("log")
         sns.despine()
-        ax.set_xlabel("")
-        ax.set_ylabel(metric)
+        ax.set_xlabel("K parameter")
+        ax.set_ylabel(metric[:-5])
+        ax.legend(title="Method", loc="upper right")
         # Save plot
         fig.tight_layout()
         plot_path = os.path.join(plots_dir, f"lineplot_{metric.replace(' ','_')}.pdf")
         fig.savefig(plot_path, bbox_inches="tight")
         fig.show()
+
+    # ==========================================
+    # PART B: Separate Block for Combined Bounds
+    # ==========================================
+    #raise NotImplementedError("Combined Bounds Plot is not ready yet.")
+    fig = plt.figure(figsize=fig_size * 1.2)
+    ax = fig.gca()
+    ax.grid(True)
+
+    # 1. Filter for BOTH metrics at once
+    subset = all_df_norm[all_df_norm["metric"].isin(bound_metrics)]
+
+    # 2. Filter out Wachter rows
+    subset = subset[subset["transform"] != "Wachter"]
+
+    # 3. Add Horizontal lines for Wachter (one for each bound if they differ)
+    # We use different linestyles so you can tell which baseline belongs to which bound
+    line_styles = ['-', '--']
+    for i, m in enumerate(bound_metrics):
+        if m in median_Wachter :
+            if i == 0:
+                ax.axhline(median_Wachter[m],
+                           color=palette["Wachter"],
+                           linestyle=line_styles[0],
+                           label=f"Wachter",
+                           alpha=0.7)
+            else:
+                ax.axhline(median_Wachter[m],
+                           color=palette["Wachter"],
+                           linestyle=line_styles[1],
+                           alpha=0.7)
+
+    lp_plot_order = actual_plot_order[1:]
+
+    # 4. Plot with style="metric"
+    # This distinguishes the Upper/Lower bounds using line styles (solid vs dashed)
+    # while 'hue' still handles the transform types.
+    sns.lineplot(data=subset, x="K", y="value", hue="transform",
+                 palette=palette,
+                 hue_order=lp_plot_order,
+                 style="metric",  # <--- Key change: separates the bounds visually
+                 marker="o",
+                 ax=ax,
+                 estimator="median",
+                 ci=None)
+
+    sns.despine()
+    ax.set_xlabel("K parameter")
+    ax.set_ylabel("Distortion")
+
+    # Remove from legend the transform header and the metric info
+    handles, labels = ax.get_legend_handles_labels()
+    new_handles = []
+    new_labels = []
+    for handle, label in zip(handles, labels):
+        if label in plot_order:
+            new_handles.append(handle)
+            new_labels.append(label)
+    ax.legend(new_handles, new_labels, title="Method", loc="upper right")
+
+    # Save Combined Plot
+    fig.tight_layout()
+    plot_path = os.path.join(plots_dir, "lineplot_Combined_Bounds.pdf")
+    fig.savefig(plot_path, bbox_inches="tight")
+    fig.show()
+    plt.close(fig)
 
     # Run Friedman + post-hoc tests
     friedman_results = run_friedman_by_K(all_df_raw, correct="bergmann", palette=palette)

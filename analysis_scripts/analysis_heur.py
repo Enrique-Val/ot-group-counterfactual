@@ -20,6 +20,8 @@ plots_dir = os.path.join(root_dir, "plots","heuristic")
 import numpy as np
 import pandas as pd
 
+def has_cvf(transform):
+    return "DirectOptimization" not in transform and transform != "Wachter"
 
 def calculate_hypervolume_2d(points, ref_point):
     """
@@ -90,7 +92,7 @@ def get_problem_bounds(results_clean, datasets, transforms, label_clusters, wass
                     if res is None or len(res) == 0:
                         continue
 
-                    if transform == "DirectOptimization":
+                    if not has_cvf(transform):
                         # DirectOptimization is valid for all CVFs, use it for bounds
                         data = res
                     else:
@@ -211,7 +213,7 @@ def clean_results_per_cvf(results_crude, datasets, transforms, label_clusters,
                     results_clean[dataset][transform][label_cluster_i] = None
                     continue
 
-                if transform == "DirectOptimization":
+                if not has_cvf(transform):
                     # No CVF column for DirectOptimization
                     df_clean = remove_self_dominated_sorted(df, wass_str, lip_str)
                     results_clean[dataset][transform][label_cluster_i] = df_clean
@@ -255,7 +257,7 @@ def compute_joint_pareto_fronts(results_clean, datasets, transforms, label_clust
                     if res is None or len(res) == 0:
                         continue
 
-                    if transform == "DirectOptimization":
+                    if not has_cvf(transform):
                         # DirectOptimization has no CVF, use all its solutions
                         df_cvf = res[[wass_str, lip_str]]
                     else:
@@ -320,7 +322,7 @@ def compute_metrics_per_transform(results_clean, all_solutions, datasets, transf
                     # Get normalization bounds for this specific problem instance
                     bounds = bounds_map.get((dataset, label_cluster_i, cvf))
 
-                    if transform == "DirectOptimization":
+                    if not has_cvf(transform):
                         res_cvf = res  # No CVF column
                     else:
                         res_cvf = res[res["CVF"] == cvf]
@@ -332,7 +334,7 @@ def compute_metrics_per_transform(results_clean, all_solutions, datasets, transf
                         dom_percent_per_cvf.append(1.0)  # 100% dominated (worst)
                         hv_per_cvf.append(0.0)  # 0 volume (worst)
 
-                        if transform == "DirectOptimization":
+                        if not has_cvf(transform):
                             break
                         continue
 
@@ -371,7 +373,7 @@ def compute_metrics_per_transform(results_clean, all_solutions, datasets, transf
                     hv_per_cvf.append(hv)
 
                     # DirectOptimization: process only once
-                    if transform == "DirectOptimization":
+                    if not has_cvf(transform):
                         min_wass_per_cvf = [min_wass_per_cvf[0]] * 10
                         min_lip_per_cvf = [min_lip_per_cvf[0]] * 10
                         dom_percent_per_cvf = [dom_percent_per_cvf[0]] * 10
@@ -496,7 +498,7 @@ if __name__ == "__main__":
                         f"label_{label_cluster_i[0]}_cluster_{label_cluster_i[1]}.csv"
                     ))
                     if df is not None and len(df) > 0:
-                        if transform == "DirectOptimization":
+                        if not has_cvf(transform):
                             df_train = df[["Wasserstein", "Lipschitz"]]
                             df_test = df[["Wasserstein", "Lipschitz"]]
                             # Rename columns to match expected names
