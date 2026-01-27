@@ -644,6 +644,32 @@ if __name__ == "__main__":
     print(f"Long-format summary saved to: {summary_file_long}")
     print(df_long.head())
 
+    # Add the time metric
+    df_time = pd.DataFrame(columns=df_long.columns)
+    for dataset, transform in itertools.product(datasets, transforms):
+        time_file = os.path.join(
+            root_dir, dataset, str(n_clusters), "heuristic", transform,
+            "exec_times.csv"
+        )
+        if os.path.exists(time_file):
+            exec_time_i = pd.read_csv(time_file)
+        # Set multiindex with the first two columns
+            exec_time_i.set_index(["label", "cluster"], inplace=True)
+        for label_cluster in label_clusters:
+            if label_cluster in exec_time_i.index:
+                time_val = exec_time_i.loc[label_cluster, "exec_time"]
+                df_time = pd.concat([df_time, pd.DataFrame({
+                    "metric": ["Time"],
+                    "value": [time_val],
+                    "dataset": [dataset],
+                    "transform": [transform],
+                    "label_cluster": [str(label_cluster)]
+                })], ignore_index=True)
+
+    # Append time data to long dataframe
+    df_long = pd.concat([df_long, df_time], ignore_index=True)
+    df_long = df_long.reset_index(drop=True)
+
     # Rename transforms
     df_long["transform"] = df_long["transform"].replace(renaming)
 
@@ -659,7 +685,7 @@ if __name__ == "__main__":
         ax = fig.gca()
         # Plot performance profile
         if "Hypervolume" in metric:
-            plot_performance_profile(df_long, metric, ax=ax, palette=palette, max_x=100, verbose=True, title=None,
+            plot_performance_profile(df_long, metric, ax=ax, palette=palette, max_x=10000, verbose=True, title=None,
                                      maximize=True)
         else:
             plot_performance_profile(df_long, metric, ax=ax, palette=palette, max_x=100, verbose=True, title=metric)
@@ -705,7 +731,7 @@ if __name__ == "__main__":
             color_palette=palette,
             ax=ax,
         )
-        ax.set_title(f"{metric}")
+        #ax.set_title(f"{metric}")
         fig.tight_layout()
         plot_path = os.path.join(plots_dir, f"critical_difference_{metric.replace(' ', '_')}.pdf")
         fig.savefig(plot_path, bbox_inches="tight")

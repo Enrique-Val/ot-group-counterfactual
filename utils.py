@@ -31,17 +31,18 @@ def synthetic_2d(noise_scale=0, size = 1000, random_state=0) -> tuple[np.ndarray
     y = y.astype(np.int64)
     return X, y
 
-def get_openml_dataset(data_id: int) -> tuple[np.ndarray, np.ndarray, dict]:
+def get_openml_dataset(data_id: int) -> tuple[np.ndarray, np.ndarray, dict, list]:
     dataset_oml = oml.datasets.get_dataset(data_id, download_data=True, download_qualities=False,
                                         download_features_meta_data=False)
     X_df, y_ser, _, _ = dataset_oml.get_data(target = dataset_oml.default_target_attribute, dataset_format="numpy")
+    features = list(X_df.columns)
     X = X_df.to_numpy()
     # Encode y with ordinals
     y = y_ser.to_numpy()
     labels = np.unique(y)
     label_dict = {label: i for i, label in enumerate(labels)}
     y = np.array([label_dict[label] for label in y], dtype=np.int64)
-    return X, y, label_dict
+    return X, y, label_dict, features
 
 class Classifier(nn.Module):
     def __init__(self, d, hidden=16):

@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 def list_params(root_dir, n_clusters=5, exp_type = "math_opt"):
     datasets = [i for i in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, i)) and not i.startswith('_') and not i == "plots"]
-    data_dir = os.path.join(root_dir, datasets[0], str(n_clusters), exp_type)
+    data_dir = os.path.join(root_dir, datasets[1], str(n_clusters), exp_type)
     transforms = []
     for transform in os.listdir(data_dir):
         if os.path.isdir(os.path.join(data_dir, transform)):
@@ -117,6 +117,8 @@ def plot_performance_profile(df, metric, title=None, ax=None, palette=None, max_
         title: Optional title for the plot
         ax: Optional matplotlib axis to plot on
     """
+    if verbose :
+        print("Generating performance profile for metric:", metric)
     # Filter for the specific metric
     df_subset = df[df["metric"] == metric].copy()
 

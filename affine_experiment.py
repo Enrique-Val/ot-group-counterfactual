@@ -73,7 +73,7 @@ if __name__ == "__main__":
         x_lims = 0, 1
         y_lims = 0, 1
     else :
-        X,y,label_dict = get_openml_dataset(args.data_id)
+        X,y,label_dict,_ = get_openml_dataset(args.data_id)
         x_lims = None, None
         y_lims = None, None
         # Standardize X

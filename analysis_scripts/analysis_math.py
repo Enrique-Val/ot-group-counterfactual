@@ -1,4 +1,5 @@
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 from itertools import product
 
 import numpy as np
@@ -8,6 +9,7 @@ import scikit_posthocs as sp
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+from torch.distributions.constraints import independent
 
 from analysis_scripts.utils import list_params, load_results, friedman_posthoc, palette, renaming, plot_order, fig_size, \
     plot_performance_profile
@@ -15,18 +17,26 @@ from analysis_scripts.utils import list_params, load_results, friedman_posthoc, 
 root_dir = "../results"
 n_clusters = 10
 
-def run_friedman_by_K(all_df, correct="bergmann", palette = None):
+def run_friedman_by_K(all_df, correct="bergmann", palette = None, store_independent = True):
     """
     For each metric and K, aggregate values across datasets and label clusters,
     then run Friedman + CD diagram.
     """
+    fs = fig_size*1.2
     results = {}
     for metric in all_df["metric"].unique():
         if "test" not in metric:
             continue  # Only test metrics
         fig, axes = plt.subplots(figsize=(12, 8), nrows=3, ncols=2)
         for i,K_val in enumerate(sorted(all_df["K"].unique())):
+            ax = axes[i // 2, i % 2]
+            if store_independent :
+                fig = plt.figure(figsize=(5, 3))
+                ax = fig.gca()
             subset = all_df[(all_df["metric"] == metric) & (all_df["K"] == K_val)]
+            if "Validity" in metric:
+                # Invert validity so that higher is better
+                subset["value"] = 1.0 - subset["value"]
             if subset.empty:
                 continue
 
@@ -45,7 +55,6 @@ def run_friedman_by_K(all_df, correct="bergmann", palette = None):
             results[(metric, K_val)] = friedman_res
 
             # --- Plot CD diagram ---
-            ax = axes[i // 2, i % 2]
             sp.critical_difference_diagram(
                 friedman_res["summary_ranks"],
                 friedman_res["p_adjusted"],
@@ -54,9 +63,16 @@ def run_friedman_by_K(all_df, correct="bergmann", palette = None):
                 color_palette=palette,
                 ax=ax,
             )
+            if store_independent :
+                fig.tight_layout()
+                plot_path = os.path.join(plots_dir, "cdd", f"friedman_cd_{metric.replace(' ','_')}_K{K_val}.pdf")
+                fig.savefig(plot_path, bbox_inches="tight")
             ax.set_title(f"{metric}  (K={K_val})")
         # The last subplot will be used for all the K's at the same time
         ax = axes[2, 1]
+        if store_independent :
+            fig = plt.figure(figsize=fs)
+            ax = fig.gca()
         subset = all_df[all_df["metric"] == metric]
         # pivot: rows = dataset–label_cluster–K, cols = transforms
         pivot = subset.pivot_table(
@@ -77,11 +93,16 @@ def run_friedman_by_K(all_df, correct="bergmann", palette = None):
             color_palette=palette,
             ax=ax,
         )
-        ax.set_title(f"{metric}  (all K)")
-        fig.tight_layout()
-        plot_path = os.path.join(plots_dir, f"friedman_cd_{metric.replace(' ','_')}.pdf")
-        fig.savefig(plot_path, bbox_inches="tight")
-        fig.show()
+        if store_independent :
+            fig.tight_layout()
+            plot_path = os.path.join(plots_dir, "cdd", f"friedman_cd_{metric.replace(' ','_')}_all_K.pdf")
+            fig.savefig(plot_path, bbox_inches="tight")
+        else :
+            ax.set_title(f"{metric}  (all K)")
+            fig.tight_layout()
+            plot_path = os.path.join(plots_dir, f"friedman_cd_{metric.replace(' ','_')}.pdf")
+            fig.savefig(plot_path, bbox_inches="tight")
+            fig.show()
 
     return results
 
@@ -276,7 +297,7 @@ if __name__ == "__main__":
     fig = plt.figure(figsize=fs)
     ax = fig.gca()
     # Plot Time Profile
-    plot_performance_profile(all_df_raw, "Exec time", ax=ax, palette=palette, max_x=1e5)
+    plot_performance_profile(all_df_raw, "Exec time", ax=ax, palette=palette, max_x=1e10, verbose = True)
     fig.tight_layout()
     plot_path = os.path.join(plots_dir, f"performance_profile_Time.pdf")
     fig.savefig(plot_path, bbox_inches="tight")

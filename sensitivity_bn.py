@@ -28,6 +28,7 @@ def train_bn(X, blacklist=[]):
     test = pb.MutualInformation(df=X)
     est = pb.PC()
     cpdag = est.estimate(hypot_test=test, arc_blacklist=blacklist)
+    # TODO Verify acyclicity.
     dag = cpdag.to_dag()
     bn = pb.BayesianNetwork(pb.GaussianNetworkType(), dag)
     bn.fit(X)
@@ -38,11 +39,44 @@ def print_mem(prefix=""):
     mem = process.memory_info().rss / 1e6  # MB
     print(f"{prefix} memory: {mem:.2f} MB")
 
-def get_structure(bn, nodes, arcs):
+def get_structure(bn, group = True):
     # Extract graph and plot it
     nodes = bn.nodes()
     arcs = bn.arcs()
     G = nx.DiGraph()
+
+    if group :
+        # 1. Automate Grouping Logic
+        for node in nodes:
+            # Check node name patterns
+            if node == "K":
+                subset_id = 0  # Group 3 (Rightmost/Bottom)
+            elif node.endswith("'"):
+                subset_id = 1  # Group 2 (Middle)
+            else:
+                subset_id = 2  # Group 1 (Leftmost/Top - The Rest)
+
+            # Add node with the calculated subset attribute
+            G.add_node(node, subset=subset_id)
+
+        G.add_edges_from(arcs)
+
+        # 2. Generate Layout based on the subset attribute
+        # align='horizontal' places layers left-to-right.
+        # Use align='vertical' if you want top-to-bottom.
+        pos = nx.multipartite_layout(G, subset_key="subset", align='horizontal')
+        # Add a bit of vertical noise to avoid overlap in group 1
+        for node, p in pos.items():
+            if G.nodes[node]['subset'] == 2:
+                p[1] += np.random.uniform(-0.2, 0.2)
+
+        # Multiply horizontal distance between groups
+        mult = 0.7
+        for node, p in pos.items():
+            p[0] *= mult
+
+        return G, pos
+
     G.add_nodes_from(nodes)
     G.add_edges_from(arcs)
     pos = nx.spring_layout(G)
@@ -51,8 +85,8 @@ def get_structure(bn, nodes, arcs):
     return G, pos
 
 def plot_bn_structure(bn, title="", filename=None):
-    G, pos = get_structure(bn, bn.nodes(), bn.arcs())
-    fig = plt.figure(figsize=(6, 4))
+    G, pos = get_structure(bn)
+    fig = plt.figure(figsize=(6*1.3, 4*1.3))
     ax = fig.gca()
     # Same color (skyblue), except for K, which is lightcoral
     colors = []
@@ -63,9 +97,29 @@ def plot_bn_structure(bn, title="", filename=None):
             colors.append("lightgreen")
         else:
             colors.append("skyblue")
+    # Thickness based on absolute value of coefficients in cpt (normalized)
+    weights = []
+    max_weight = 0
+    for arc in G.edges():
+        child = arc[1]
+        cpt = bn.cpd(child)
+        parent = arc[0]
+        parent_int = cpt.evidence().index(parent)
+        coef_raw = cpt.beta[parent_int+1]
+        if parent == child[:-1]:
+            coef_raw = coef_raw-1
+        coef = np.abs(coef_raw)
+        # Get the variable range to account for different scales
+        var_range = X_global[parent].max() - X_global[parent].min()
+        coef = coef*var_range
+        weights.append(coef)
+        if coef > max_weight:
+            max_weight = coef
+    # Normalize weights to [1,3]
+    weights = [(w / max_weight) * 4 + 0.25 for w in weights]
     nx.draw(G, pos, with_labels=True, node_size=2000, node_color=colors, font_size=16, font_weight='bold',
-            arrowsize=20, ax=ax)
-    ax.margins(0.1)
+            arrowsize=20, ax=ax, width=weights,edge_color='#404040')
+    ax.margins(0.05)
     # ax.set_title(f"Learned Bayesian Network Structure (only primes and bilip) for label {y_orig}, cluster {cluster_id}")
     fig.tight_layout()
     if filename is not None:
@@ -91,7 +145,7 @@ if __name__ == "__main__":
 
     np.random.seed(args.random_seed)
 
-    args.data_id = -1
+    args.data_id = 44090
     args.transform = 'PSDAffine'
     args.verbose = True
     args.math_opt = True
@@ -109,10 +163,11 @@ if __name__ == "__main__":
     # ============================
     if args.data_id == -1:
         X,y = synthetic_2d(noise_scale=0.05, random_state=args.random_seed, size=1000)
+        features = ['x1', 'x2']
         x_lims = 0, 1
         y_lims = 0, 1
     else :
-        X,y,label_dict = get_openml_dataset(args.data_id)
+        X,y,label_dict,features = get_openml_dataset(args.data_id)
         x_lims = None, None
         y_lims = None, None
         # Standardize X
@@ -158,7 +213,7 @@ if __name__ == "__main__":
 
     n_cluster = args.n_clusters
     y_orig = 0
-    cluster_id = 0
+    cluster_id = 1
     cluster_alg_dir = os.path.join(cluster_path, "label_"+str(y_orig)+".pkl")
 
 
@@ -262,12 +317,31 @@ if __name__ == "__main__":
     # Create a Dataframe with columns named x1, x2, ..., xn, x1_prime, x2_prime, ..., xn_prime, bilip_proxy
     columns = []
     for i in range(d):
-        columns.append(f"x{i+1}")
+        columns.append(features[i])
     for i in range(d):
-        columns.append(f"x{i+1}\'")
+        columns.append(f"{features[i]}\'")
     columns.append("K")
 
     X_global = pd.DataFrame(X_global, columns=columns)
+
+    # Get the average change per feature and retain the m features with bigger change
+    m = 4
+    print("Average change per feature:")
+    feature_changes = []
+    for i in range(d):
+        change = np.mean(np.abs(X_global[f"{features[i]}\'"] - X_global[features[i]])**2)
+        print(f"Feature {features[i]}: {change:.4f}")
+        feature_changes.append((features[i], change))
+    # Sort by change
+    feature_changes.sort(key=lambda x: x[1], reverse=True)
+    # Retain top m features
+    top_features = [feature_changes[i][0] for i in range(m)]
+    print(f"Retaining top {m} features with biggest change:", top_features)
+    # Keep only top m features and K
+    selected_columns = top_features + [f"{feat}\'" for feat in top_features] + ["K"]
+    X_global = X_global[selected_columns]
+    d = m
+    features = top_features
     # Log transform K to log scale
     #X_global["K"] = np.log(X_global["K"]-1)
     # Min max scale each column to [0,1]
@@ -275,25 +349,21 @@ if __name__ == "__main__":
         continue
         X_global[col] = (X_global[col] - X_global[col].min()) / (X_global[col].max() - X_global[col].min())
 
-    # Make it differential. The values of X_prime should be X_prime - X
-    for i in range(d):
-        X_global[f"x{i+1}\'"] = X_global[f"x{i+1}\'"]# - X_global[f"x{i+1}"]
-
     # First, define blacklist of edges to avoid
     #Bilipschitz cannot go into original features
     blacklist = []
     for i in range(d):
-        blacklist.append(( "K", f"x{i+1}"))
+        blacklist.append(("K", features[i]))
 
     # Transformed features cannot go into original features
     for i in range(d):
         for j in range(d):
-            blacklist.append((f"x{i+1}\'", f"x{j+1}"))
+            blacklist.append((features[i]+"\'", features[j]))
 
     # No nodes can go into bilipschitz
-    for i in range(d):
-        blacklist.append((f"x{i+1}", "K"))
-        blacklist.append((f"x{i+1}\'", "K"))
+    for i in X_global.columns[:-1]:
+        blacklist.append((i, "K"))
+        blacklist.append((i, "K"))
 
     bn = train_bn(X_global, blacklist=blacklist)
 
@@ -314,7 +384,7 @@ if __name__ == "__main__":
     for i in range(d):
         for j in range(d):
             if i != j:
-                blacklist.append((f"x{i+1}\'", f"x{j+1}\'"))
+                blacklist.append((features[i]+"\'", features[j]+"\'"))
 
     bn2 = train_bn(X_global, blacklist=blacklist)
 
