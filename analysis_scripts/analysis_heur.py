@@ -691,7 +691,7 @@ if __name__ == "__main__":
             plot_performance_profile(df_long, metric, ax=ax, palette=palette, max_x=100, verbose=True, title=metric)
         fig.tight_layout()
         plot_path = os.path.join(plots_dir, f"performance_profile_{metric.replace(' ', '_')}.pdf")
-        fig.savefig(plot_path, bbox_inches="tight")
+        fig.savefig(plot_path, bbox_inches="tight", pad_inches=0)
         fig.show()
 
     # Now critical difference plots for each metric

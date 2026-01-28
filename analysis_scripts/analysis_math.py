@@ -37,6 +37,9 @@ def run_friedman_by_K(all_df, correct="bergmann", palette = None, store_independ
             if "Validity" in metric:
                 # Invert validity so that higher is better
                 subset["value"] = 1.0 - subset["value"]
+            if "lower" in metric:
+                # Invert lower bound so that higher is better
+                subset["value"] = - subset["value"]
             if subset.empty:
                 continue
 
@@ -138,7 +141,7 @@ if __name__ == "__main__":
     records_raw = []
     records_norm = []
 
-    # Compute median metrics for Wachter
+    # Compute median metrics for Independent
     all_Wachter_series = []
     for dataset, label_cluster_i in product(datasets, label_clusters):
         df = results[dataset]["Wachter"][label_cluster_i].iloc[0]  # First row, they are all the same
@@ -197,8 +200,8 @@ if __name__ == "__main__":
                 # Since indices match exactly, pandas divides row-by-row automatically
                 # remove inter-subject variability while maintaining interpretability
                 for metric in df.columns:
-                    continue
-                    df_norm[metric] = df[metric] / base_df[metric] * median_Wachter[metric]
+                    #continue
+                    df_norm[metric] = df[metric] / base_df[metric]
 
                 # Drop rows with bad ws
                 df_norm = df_norm[~bad_ws_mask]
@@ -291,16 +294,16 @@ if __name__ == "__main__":
     plot_performance_profile(all_df_raw, "Wasserstein test", ax=ax, palette=palette, max_x=7, verbose=True)
     fig.tight_layout()
     plot_path = os.path.join(plots_dir, f"performance_profile_Wasserstein_test.pdf")
-    fig.savefig(plot_path, bbox_inches="tight")
+    fig.savefig(plot_path, bbox_inches="tight", pad_inches=0)
     fig.show()
 
     fig = plt.figure(figsize=fs)
     ax = fig.gca()
     # Plot Time Profile
-    plot_performance_profile(all_df_raw, "Exec time", ax=ax, palette=palette, max_x=1e10, verbose = True)
+    plot_performance_profile(all_df_raw, "Exec time", ax=ax, palette=palette, max_x=1e6, verbose = True)
     fig.tight_layout()
     plot_path = os.path.join(plots_dir, f"performance_profile_Time.pdf")
-    fig.savefig(plot_path, bbox_inches="tight")
+    fig.savefig(plot_path, bbox_inches="tight", pad_inches=0)
     fig.show()
 
     LOWER_BOUND = "Empirical lower bound test"
@@ -308,7 +311,7 @@ if __name__ == "__main__":
     bound_metrics = [LOWER_BOUND, UPPER_BOUND]
 
     # Lineplot. K is the x-axis, transform is hue, value is y-axis
-    for metric in all_df_norm["metric"].unique():
+    for i,metric in enumerate(all_df_norm["metric"].unique()):
         fig = plt.figure(figsize=fig_size*1.2)
         ax = fig.gca()
         ax.grid(True)
@@ -316,11 +319,11 @@ if __name__ == "__main__":
             continue  # Only plot test metrics
         if "Wasserstein" in metric or "Time" in metric or True :
             subset = all_df_norm[all_df_norm["metric"] == metric]
-            # Filter out Wachter
-            subset = subset[subset["transform"] != "Wachter"]
-            # Horizontal line at y=1, named Wachter
-            ax.axhline(median_Wachter[metric], color=palette["Wachter"], linestyle='--', label="Wachter")
-            lp_plot_order = actual_plot_order[1:]  # Exclude Wachter
+            # Filter out Independent
+            subset = subset[subset["transform"] != "Independent"]
+            # Horizontal line at y=1, named Independent
+            ax.axhline(1, color=palette["Independent"], linestyle="--", label="Independent")
+            lp_plot_order = actual_plot_order[1:]  # Exclude Independent
         else :
             subset = all_df_raw[all_df_raw["metric"] == metric]
             lp_plot_order = actual_plot_order
@@ -334,12 +337,15 @@ if __name__ == "__main__":
             ax.set_yscale("log")
         sns.despine()
         ax.set_xlabel("K parameter")
-        ax.set_ylabel(metric[:-5])
+        if "Wasserstein" in metric:
+            ax.set_ylabel("$W_2$ distance (normalized)")
+        else :
+            ax.set_ylabel(metric[:-5])
         ax.legend(title="Method", loc="upper right")
         # Save plot
         fig.tight_layout()
         plot_path = os.path.join(plots_dir, f"lineplot_{metric.replace(' ','_')}.pdf")
-        fig.savefig(plot_path, bbox_inches="tight")
+        fig.savefig(plot_path, bbox_inches="tight", pad_inches=0)
         fig.show()
 
     # ==========================================
@@ -353,23 +359,23 @@ if __name__ == "__main__":
     # 1. Filter for BOTH metrics at once
     subset = all_df_norm[all_df_norm["metric"].isin(bound_metrics)]
 
-    # 2. Filter out Wachter rows
-    subset = subset[subset["transform"] != "Wachter"]
+    # 2. Filter out Independent rows
+    subset = subset[subset["transform"] != "Independent"]
 
-    # 3. Add Horizontal lines for Wachter (one for each bound if they differ)
+    # 3. Add Horizontal lines for Independent (one for each bound if they differ)
     # We use different linestyles so you can tell which baseline belongs to which bound
     line_styles = ['-', '--']
     for i, m in enumerate(bound_metrics):
         if m in median_Wachter :
             if i == 0:
                 ax.axhline(median_Wachter[m],
-                           color=palette["Wachter"],
+                           color=palette["Independent"],
                            linestyle=line_styles[0],
-                           label=f"Wachter",
+                           label=f"Independent",
                            alpha=0.7)
             else:
                 ax.axhline(median_Wachter[m],
-                           color=palette["Wachter"],
+                           color=palette["Independent"],
                            linestyle=line_styles[1],
                            alpha=0.7)
 
@@ -404,7 +410,7 @@ if __name__ == "__main__":
     # Save Combined Plot
     fig.tight_layout()
     plot_path = os.path.join(plots_dir, "lineplot_Combined_Bounds.pdf")
-    fig.savefig(plot_path, bbox_inches="tight")
+    fig.savefig(plot_path, bbox_inches="tight", pad_inches=0)
     fig.show()
     plt.close(fig)
 

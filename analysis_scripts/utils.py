@@ -7,6 +7,7 @@ import pandas as pd
 from pyomo.contrib.parmest.graphics import sns
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
 
 def list_params(root_dir, n_clusters=5, exp_type = "math_opt"):
@@ -219,6 +220,9 @@ def plot_performance_profile(df, metric, title=None, ax=None, palette=None, max_
         )
     # 4. Formatting
     ax.set_xscale("log")
+    # Uncomment below to force integer ticks on x-axis
+    #ax.xaxis.set_minor_formatter(mticker.ScalarFormatter())
+    #ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
     ax.set_xlim(1, max_x)  # Limits x-axis to 100x the cost of the best method
     ax.set_xlabel(f"Performance ratio (relative to best method)")
     ax.set_ylabel(f"Fraction of problems solved")
@@ -227,24 +231,28 @@ def plot_performance_profile(df, metric, title=None, ax=None, palette=None, max_
     ax.legend(title="Method", loc="lower right")
     ax.grid(True, which="both", linestyle="--", alpha=0.5)
 
+    # Remove top and right spines for cleaner look
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
     return ax
 
 
 renaming = {"DiagonalAffine" : "Diag. \n affine", "GaussianCommutativeTransform" : "Comm. \n Gaussian",
                 "GaussianTransform" : "Any \n Gaussian", "PSDAffine" : "PSD \n affine", "GMMForwardTransform" : "3-GMM",
-                "DirectOptimization" : "Group w/ \n Bilipschitz", "FullAffine" : "Any \n affine",
+                "DirectOptimization" : "Group w/ \n bi-Lipschitz", "FullAffine" : "Any \n affine",
              "GaussianScaleTransform" : "Scaled \n Gaussian",
-            "DirectOptimization_nb" : "Group w/ \n Lipschitz", "Wachter" : "Wachter" }
+            "DirectOptimization_nb" : "Group w/ \n Lipschitz", "Wachter" : "Independent" }
 
-plot_order = ["Wachter", "Group w/ \n Lipschitz", "Group w/ \n Bilipschitz", "PSD \n affine", "Diag. \n affine", "Any \n Gaussian", "Comm. \n Gaussian", "Scaled \n Gaussian" , "3-GMM"]
+plot_order = ["Independent", "Group w/ \n Lipschitz", "Group w/ \n bi-Lipschitz", "PSD \n affine", "Diag. \n affine", "Any \n Gaussian", "Comm. \n Gaussian", "Scaled \n Gaussian" , "3-GMM"]
 
 renaming_nb = {"DiagonalAffine" : "Diag. affine", "GaussianCommutativeTransform" : "Comm. Gaussian",
                 "GaussianTransform" : "Any Gaussian", "PSDAffine" : "PSD affine", "GMMForwardTransform" : "3-GMM",
-                "DirectOptimization" : "Group w/ Bilipschitz", "FullAffine" : "Any affine",
+                "DirectOptimization" : "Group w/ bi-Lipschitz", "FullAffine" : "Any affine",
                 "GaussianScaleTransform" : "Scaled Gaussian",
-               "DirectOptimization_nb": "Group w/ Lipschitz", "Wachter": "Wachter"}
+               "DirectOptimization_nb": "Group w/ Lipschitz", "Wachter": "Independent"}
 
-plot_order_bn = ["Wachter", "Group w/ Lipschitz", "Group w/ Bilipschitz", "PSD affine", "Diag. affine", "Any Gaussian", "Comm. Gaussian", "Scaled Gaussian" , "3-GMM"]
+plot_order_bn = ["Independent", "Group w/ Lipschitz", "Group w/ bi-Lipschitz", "PSD affine", "Diag. affine", "Any Gaussian", "Comm. Gaussian", "Scaled Gaussian" , "3-GMM"]
 
 renaming = renaming_nb
 plot_order = plot_order_bn
