@@ -9,7 +9,7 @@ import torch
 import os
 
 from pymoo.termination.default import DefaultMultiObjectiveTermination
-from sklearn.cluster import SpectralClustering
+from sklearn.cluster import SpectralClustering, AffinityPropagation
 from sklearn.mixture import GaussianMixture
 
 from group_cfx.solver.pymoo_solver import PyMooSolver
@@ -53,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='lg', help='Model to use for the classifier (default: logistic regression)',
                         choices=['lg', 'gbt','mlp'])
     parser.add_argument('--cluster_alg', type=str, help='Clustering algorithm to use for subgrouping (default: KMedoids)',
-                        choices=['kmedoids', 'gmm', 'spectral'])
+                        choices=['kmedoids', 'gmm', 'spectral', 'affinity'])
     args = parser.parse_args()
 
     np.random.seed(args.random_seed)
@@ -159,6 +159,8 @@ if __name__ == "__main__":
                 cluster_alg = GaussianMixture(n_components=args.n_clusters, random_state=args.random_seed)
             elif args.cluster_alg == "spectral" :
                 cluster_alg = SpectralClustering(n_clusters=args.n_clusters, random_state=args.random_seed, assign_labels='discretize')
+            elif args.cluster_alg == "affinity" :
+                cluster_alg = AffinityPropagation(random_state=args.random_seed)
             else :
                 raise ValueError("Unknown clustering algorithm")
             cluster_alg.fit(sub_data[:max_instances])
@@ -184,6 +186,10 @@ if __name__ == "__main__":
         cluster_labels = cluster_alg.predict(seggregated_data)
         # Get "sub" datasets for each cluster
         X_groups_list = get_groups(seggregated_data, cluster_alg)
+        print("Length of X_groups_list:", len(X_groups_list))
+        # If using affinity propagation, the number of clusters is not fixed, so we truncate to n_clusters
+        if args.cluster_alg == "affinity" and len(X_groups_list) > args.n_clusters:
+            X_groups_list = X_groups_list[:args.n_clusters]
 
         # Confidence for y_prime
         y_prime_conf = 0.8
