@@ -9,6 +9,8 @@ import torch
 import os
 
 from pymoo.termination.default import DefaultMultiObjectiveTermination
+from sklearn.cluster import SpectralClustering
+from sklearn.mixture import GaussianMixture
 
 from group_cfx.solver.pymoo_solver import PyMooSolver
 from utils import synthetic_2d, get_openml_dataset, train_lg, \
@@ -50,6 +52,8 @@ if __name__ == "__main__":
     parser.add_argument('--only_train', action='store_true', help='Only train the classifier and density estimator')
     parser.add_argument('--model', type=str, default='lg', help='Model to use for the classifier (default: logistic regression)',
                         choices=['lg', 'gbt','mlp'])
+    parser.add_argument('cluster_alg', type=str, help='Clustering algorithm to use for subgrouping (default: KMedoids)',
+                        choices=['kmedoids', 'gmm', 'spectral'])
     args = parser.parse_args()
 
     np.random.seed(args.random_seed)
@@ -59,7 +63,7 @@ if __name__ == "__main__":
     # Create output directory if it does not exist
     data_path = os.path.join(args.output_dir, f"data_{args.data_id}")
     models_path = os.path.join(data_path, "models")
-    cluster_path = os.path.join(data_path,str(args.n_clusters))
+    cluster_path = os.path.join(data_path,args.cluster_alg,str(args.n_clusters))
     transform_path = os.path.join(cluster_path, "math_opt" if args.math_opt else "heuristic", args.transform)
     if not os.path.exists(transform_path):
         os.makedirs(transform_path)
@@ -148,12 +152,16 @@ if __name__ == "__main__":
 
             # Use kmeans clustering (sklearn)
             # If there are more than 20k instances, train only with the first 20k and predict the rest
-            if sub_data.shape[0] > 20000:
+            max_instances = 20000
+            if args.cluster_alg == "kmedoids" :
                 cluster_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
-                cluster_alg.fit(sub_data[:20000])
-            else:
-                cluster_alg = KMedoids(n_clusters=args.n_clusters, random_state=args.random_seed)
-                cluster_alg.fit(sub_data)
+            elif args.cluster_alg == "gmm" :
+                cluster_alg = GaussianMixture(n_components=args.n_clusters, random_state=args.random_seed)
+            elif args.cluster_alg == "spectral" :
+                cluster_alg = SpectralClustering(n_clusters=args.n_clusters, random_state=args.random_seed, assign_labels='discretize')
+            else :
+                raise ValueError("Unknown clustering algorithm")
+            cluster_alg.fit(sub_data[:max_instances])
             # Save the cluster algorithm, pickling it
             joblib.dump(cluster_alg, cluster_alg_dir)
 

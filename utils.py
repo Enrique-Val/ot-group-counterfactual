@@ -7,9 +7,12 @@ import torch
 from matplotlib import pyplot as plt
 from optuna import trial
 from scipy.stats import uniform, norm
+from sklearn.cluster import SpectralClustering
 from sklearn.linear_model import LogisticRegression
+from sklearn.mixture import GaussianMixture
 from sklearn.model_selection import GridSearchCV, cross_val_score
 from sklearn.neural_network import MLPClassifier
+from sklearn_extra.cluster import KMedoids
 from torch import nn, optim
 from torch.utils.data import DataLoader, TensorDataset
 import openml as oml
@@ -560,7 +563,21 @@ def get_groups(data, cluster_alg, device="cpu") :
         X_sub = X_sub[:200]
         print("Found", X_sub.shape)
         min_samples = 20
-        if X_sub.shape[0] < min_samples:
+        if X_sub.shape[0] == 0:
+            # Edge case: Perturb the centroid to create a small cluster
+            print(f"Warning: Cluster {c} has no samples. Creating a small cluster by perturbing the centroid.")
+            if isinstance(cluster_alg, KMedoids):
+                centroid = cluster_alg.cluster_centers_[c]
+            elif isinstance(cluster_alg, GaussianMixture):
+                centroid = cluster_alg.means_[c]
+            elif isinstance(cluster_alg, SpectralClustering):
+                centroid = data[cluster_labels == c].mean(axis=0)
+            else:
+                raise ValueError("Unknown clustering algorithm")
+            noise = np.random.normal(0, 0.01, size=20)
+            synthetic_sample = centroid + noise
+            X_sub = np.array([synthetic_sample])
+        elif X_sub.shape[0] < min_samples:
             # Warn the user and introduce synthetic samples by jittering up to min_samples
             print(
                 f"Warning: Cluster {c} has less than 20 samples ({X_sub.shape[0]} samples). Augmenting data by jittering.")
