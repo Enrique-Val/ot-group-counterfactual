@@ -44,6 +44,11 @@ def get_lipschitz_bounds(X, Y, eps=1e-8):
     # We only care about valid distances > eps to avoid instability
     valid_indices = valid_dist_X > eps
     final_ratios = valid_dist_Y[valid_indices] / valid_dist_X[valid_indices]
+        # If no valid pairs, return default bounds (no expansion)
+        return {
+            "min_expansion": 1.0,
+            "max_expansion": 1.0,
+        }
 
     return {
         "min_expansion": final_ratios.min().item(),
