@@ -12,7 +12,7 @@ from pymoo.termination.default import DefaultMultiObjectiveTermination
 
 from group_cfx.solver.pymoo_solver import PyMooSolver
 from utils import synthetic_2d, get_openml_dataset, train_lg, \
-    cross_experiment, cross_experiment_pymoo, get_transform, get_groups
+    cross_experiment, cross_experiment_pymoo, get_transform, get_groups, train_gbt, train_mlp
 
 from sklearn_extra.cluster import KMedoids
 
@@ -48,6 +48,8 @@ if __name__ == "__main__":
                                  'GMMForwardTransform'])
     parser.add_argument('--math_opt', action='store_true', help='Use mathematical optimization')
     parser.add_argument('--only_train', action='store_true', help='Only train the classifier and density estimator')
+    parser.add_argument('--model', type=str, default='lg', help='Model to use for the classifier (default: logistic regression)',
+                        choices=['lg', 'gbt','mlp'])
     args = parser.parse_args()
 
     np.random.seed(args.random_seed)
@@ -97,23 +99,30 @@ if __name__ == "__main__":
     device = "cpu"
 
     # Load model if it exists
-    if os.path.exists(os.path.join(models_path, "lg.pkl")) and not args.only_train:
-        f = joblib.load(os.path.join(models_path, "lg.pkl"))
-        print("Loaded model from", os.path.join(models_path, "lg.pkl"))
+    if os.path.exists(os.path.join(models_path, args.model + ".pkl")) and not args.only_train:
+        f = joblib.load(os.path.join(models_path, args.model + ".pkl"))
+        print("Loaded model from", os.path.join(models_path, args.model + ".pkl"))
         print("Best validation accuracy:", f.score(X, y))
 
     else :
         # Train a logistic regression model
         scoring = "neg_log_loss"
-        f, params, score = train_lg(X, y, scoring=scoring, random_state=args.random_seed, max_iter = 10000)
+        if args.model == "lg" :
+            f, params, score = train_lg(X, y, scoring=scoring, random_state=args.random_seed, max_iter = 10000)
+        elif args.model == "gbt" :
+            f, params, score = train_gbt(X, y, scoring=scoring, random_state=args.random_seed)
+        elif args.model == "mlp" :
+            f, params, score = train_mlp(X, y, scoring=scoring, random_state=args.random_seed)
+        else :
+            raise ValueError("Unknown model")
 
         # Pickle model to file
-        joblib.dump(f, os.path.join(models_path, "lg.pkl"))
+        joblib.dump(f, os.path.join(models_path, args.model + ".pkl"))
 
         # Save the training results (param and score) to a text file
-        with open(os.path.join(models_path, "lg_params.txt"), "w") as file :
+        with open(os.path.join(models_path, args.model + "_params.txt"), "w") as file :
             file.write(f"{params}\n")
-        with open(os.path.join(models_path, "lg_"+str(scoring)+".txt"), "w") as file :
+        with open(os.path.join(models_path, args.model + "_"+str(scoring)+".txt"), "w") as file :
             file.write(f"{score}\n")
 
     # Compute max and mins per feature

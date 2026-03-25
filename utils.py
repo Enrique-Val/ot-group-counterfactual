@@ -5,9 +5,11 @@ import numpy as np
 import pandas as pd
 import torch
 from matplotlib import pyplot as plt
+from optuna import trial
 from scipy.stats import uniform, norm
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GridSearchCV, cross_val_score
+from sklearn.neural_network import MLPClassifier
 from torch import nn, optim
 from torch.utils.data import DataLoader, TensorDataset
 import openml as oml
@@ -18,6 +20,8 @@ from group_cfx.transforms.gaussian_transforms import GaussianCommutativeTransfor
     GaussianScaleTransform
 from group_cfx.transforms.probabilistic_transforms import GMMForwardTransform, ProbabilisticTransform
 from group_cfx.transforms.utils import distortion_metric, get_lipschitz_bounds
+
+import optuna
 
 
 def synthetic_2d(noise_scale=0, size = 1000, random_state=0) -> tuple[np.ndarray, np.ndarray]:
@@ -100,24 +104,127 @@ def train_classifier(X, y, batch_size = 64, device="cpu"):
 
     return f
 
-def train_gbt(X, y, random_state):
-    # Train using CV for validation
-    from sklearn.model_selection import GridSearchCV
-    param_grid = {
-        #'n_estimators': [50, 100, 200],
-        'learning_rate': [0.01, 0.1, 0.2
-        ],
-        'max_depth': [3, 5, 7]
-    }
-    gbt_cv = GridSearchCV(GradientBoostingClassifier(random_state=random_state), param_grid, cv=10, n_jobs=-1)
-    gbt_cv.fit(X, y)
+
+def train_mlp(X, y, scoring="neg_log_loss", random_state=0, bo=True):
+    if bo:
+        def objective(trial):
+            # 1. Dynamically build the hidden_layer_sizes tuple
+            n_layers = trial.suggest_int('n_layers', 1, 3)  # Try 1 to 3 hidden layers
+            layers = []
+            for i in range(n_layers):
+                # Suggest neurons for each individual layer
+                layers.append(trial.suggest_int(f'n_units_layer_{i}', 10, 100))
+
+            # 2. Suggest other standard MLP hyperparameters
+            params = {
+                'hidden_layer_sizes': tuple(layers),
+                'activation': trial.suggest_categorical('activation', ['relu', 'tanh', 'logistic']),
+                'solver': trial.suggest_categorical('solver', ['adam', 'sgd']),
+                'alpha': trial.suggest_float('alpha', 1e-5, 1e-1, log=True),  # L2 penalty
+                'learning_rate_init': trial.suggest_float('learning_rate_init', 1e-4, 1e-1, log=True)
+            }
+
+            # Instantiate model.
+            # Note: max_iter=500 is added to give the network enough epochs to converge and avoid warnings.
+            clf = MLPClassifier(**params, max_iter=500, random_state=random_state)
+
+            # Evaluate
+            score = cross_val_score(clf, X, y, cv=10, n_jobs=-1, scoring=scoring).mean()
+            return score
+
+        sampler = optuna.samplers.TPESampler(seed=random_state)
+        study = optuna.create_study(direction='maximize', sampler=sampler)
+
+        # Run trials
+        study.optimize(objective, n_trials=20)
+
+        print("Best MLP " + scoring + ":", study.best_value)
+        print("Best parameters:", study.best_params)
+
+        # Retrain best model
+        # We have to reconstruct the hidden_layer_sizes tuple from the flat dictionary Optuna returns
+        best_params = study.best_params.copy()
+        n_layers = best_params.pop('n_layers')
+        best_hidden_sizes = tuple(best_params.pop(f'n_units_layer_{i}') for i in range(n_layers))
+        best_params['hidden_layer_sizes'] = best_hidden_sizes
+
+        best_clf = MLPClassifier(**best_params, max_iter=500, random_state=random_state)
+        best_clf.fit(X, y)
+
+        return best_clf, study.best_params, study.best_value
+
+    else:
+        # Train MLP with default params
+        clf = MLPClassifier(max_iter=500, random_state=random_state)
+        clf.fit(X, y)
+        score = cross_val_score(clf, X, y, cv=10, n_jobs=-1, scoring=scoring).mean()
+
+        default_params = {
+            "hidden_layer_sizes": clf.hidden_layer_sizes,
+            "activation": clf.activation,
+            "solver": clf.solver,
+            "alpha": clf.alpha,
+            "learning_rate_init": clf.learning_rate_init
+        }
+
+        print("MLP classifier default " + scoring + ":", score)
+        return clf, default_params, score
+
+def train_gbt(X, y, scoring = "neg_log_loss", random_state = 0, bo = True):
+    if bo :
+        # 1. Define the objective function inside your training function
+        def objective(trial):
+            # Dynamically suggest hyperparameters
+            # log=True acts just like prior='log-uniform' in skopt
+            params = {
+                'n_estimators': trial.suggest_int('n_estimators', 50, 200),
+                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+                'max_depth': trial.suggest_int('max_depth', 3, 7)
+            }
+
+            # Instantiate the model with the suggested params
+            clf = GradientBoostingClassifier(**params, random_state=random_state)
+
+            # Evaluate using Cross-Validation
+            # Optuna expects a single float value to optimize, so we take the mean CV score
+            score = cross_val_score(clf, X, y, cv=10, n_jobs=-1, scoring=scoring).mean()
+
+            return score
+
+        # 2. Create the study and run optimization
+        # TPE (Tree-structured Parzen Estimator) is the default Bayesian sampler.
+        # We pass the random_state to the sampler to ensure reproducible results.
+        sampler = optuna.samplers.TPESampler(seed=random_state)
+
+        # We want to 'maximize' accuracy (if optimizing loss, we would 'minimize')
+        study = optuna.create_study(direction='maximize', sampler=sampler)
+
+        # Run 20 trials
+        study.optimize(objective, n_trials=20)
+
+        print("Best GBT accuracy:", study.best_value)
+        print("Best parameters:", study.best_params)
+
+        # 3. Retrain the best model on the full dataset to return it
+        best_clf = GradientBoostingClassifier(**study.best_params, random_state=random_state)
+        best_clf.fit(X, y)
+
+        return best_clf, study.best_params, study.best_value
+    else:
+        # Train gbt with default params and return it
+        clf = GradientBoostingClassifier(random_state=random_state)
+        clf.fit(X, y)
+        score = cross_val_score(clf, X, y, cv=10, n_jobs=-1, scoring=scoring).mean()
+        default_params = {}
+        default_params["n_estimators"] = clf.n_estimators
+        default_params["learning_rate"] = clf.learning_rate
+        default_params["max_depth"] = clf.max_depth
+        print("GBT classifier " + scoring + ":", score)
+        return clf, default_params, score
 
 
 
-    print("GBT classifier accuracy:", gbt_cv.best_score_)
-    return gbt_cv.best_estimator_
-
-def train_lg(X, y, scoring = "logloss", random_state = 0, max_iter = 100, n_folds = 10):
+def train_lg(X, y, scoring = "neg_log_loss", random_state = 0, max_iter = 100, n_folds = 10):
     # Train Logistic Regression using CV for validation
     # Since C = 1/lambda and the L2 regularization term in sklearn is 1/2 * lambda * ||w||^2, we have C = 1/(2lambda)
     param_grid = {
