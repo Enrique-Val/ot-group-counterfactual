@@ -109,11 +109,13 @@ def train_mlp(X, y, scoring="neg_log_loss", random_state=0, bo=True):
     if bo:
         def objective(trial):
             # 1. Dynamically build the hidden_layer_sizes tuple
-            n_layers = trial.suggest_int('n_layers', 1, 3)  # Try 1 to 3 hidden layers
+            n_layers = trial.suggest_int('n_layers', 1, 5)  # Try 1 to 3 hidden layers
             layers = []
+            #Layers will be proportional to the number of features, with 1 and 5 multipliers
+            d = X.shape[1]
             for i in range(n_layers):
                 # Suggest neurons for each individual layer
-                layers.append(trial.suggest_int(f'n_units_layer_{i}', 10, 100))
+                layers.append(trial.suggest_int(f'n_units_layer_{i}', d, 5*d))
 
             # 2. Suggest other standard MLP hyperparameters
             params = {
@@ -126,7 +128,7 @@ def train_mlp(X, y, scoring="neg_log_loss", random_state=0, bo=True):
 
             # Instantiate model.
             # Note: max_iter=500 is added to give the network enough epochs to converge and avoid warnings.
-            clf = MLPClassifier(**params, max_iter=500, random_state=random_state)
+            clf = MLPClassifier(**params, max_iter=1000, random_state=random_state)
 
             # Evaluate
             score = cross_val_score(clf, X, y, cv=10, n_jobs=-1, scoring=scoring).mean()
@@ -136,7 +138,7 @@ def train_mlp(X, y, scoring="neg_log_loss", random_state=0, bo=True):
         study = optuna.create_study(direction='maximize', sampler=sampler)
 
         # Run trials
-        study.optimize(objective, n_trials=20)
+        study.optimize(objective, n_trials=50)
 
         print("Best MLP " + scoring + ":", study.best_value)
         print("Best parameters:", study.best_params)
@@ -148,7 +150,7 @@ def train_mlp(X, y, scoring="neg_log_loss", random_state=0, bo=True):
         best_hidden_sizes = tuple(best_params.pop(f'n_units_layer_{i}') for i in range(n_layers))
         best_params['hidden_layer_sizes'] = best_hidden_sizes
 
-        best_clf = MLPClassifier(**best_params, max_iter=500, random_state=random_state)
+        best_clf = MLPClassifier(**best_params, max_iter=1000, random_state=random_state)
         best_clf.fit(X, y)
 
         return best_clf, study.best_params, study.best_value
@@ -200,7 +202,7 @@ def train_gbt(X, y, scoring = "neg_log_loss", random_state = 0, bo = True):
         study = optuna.create_study(direction='maximize', sampler=sampler)
 
         # Run 20 trials
-        study.optimize(objective, n_trials=20)
+        study.optimize(objective, n_trials=50)
 
         print("Best GBT accuracy:", study.best_value)
         print("Best parameters:", study.best_params)
