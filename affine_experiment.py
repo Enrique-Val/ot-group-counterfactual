@@ -64,7 +64,7 @@ if __name__ == "__main__":
     data_path = os.path.join(args.output_dir, f"data_{args.data_id}")
     models_path = os.path.join(data_path, "models")
     cluster_path = os.path.join(data_path,args.cluster_alg,str(args.n_clusters))
-    transform_path = os.path.join(cluster_path, "math_opt" if args.math_opt else "heuristic", args.transform)
+    transform_path = os.path.join(args.model, cluster_path, "math_opt" if args.math_opt else "heuristic", args.transform)
     if not os.path.exists(transform_path):
         os.makedirs(transform_path)
     if not os.path.exists(models_path):
