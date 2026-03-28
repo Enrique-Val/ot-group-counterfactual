@@ -552,13 +552,16 @@ def get_transform(transform_str,X_sub, xl = None, xu = None, device ="cpu") :
 
     return transform
 
-def get_groups(data, cluster_alg, device="cpu") :
+def get_groups(data, cluster_alg, device="cpu", ordered = False) :
+    # Keep track of the original cluster size
+    cluster_size = {}
     # Label instances
     cluster_labels = cluster_alg.predict(data)
     # Get "sub" datasets for each cluster
     X_sub_list = []
     for c in np.unique(cluster_labels):
         X_sub = data[cluster_labels == c]
+        cluster_size[c] = X_sub.shape[0]
         # Limit to 200 instances for testing
         X_sub = X_sub[:200]
         print("Found", X_sub.shape)
@@ -586,4 +589,7 @@ def get_groups(data, cluster_alg, device="cpu") :
             jittered_samples = X_sub[np.random.choice(X_sub.shape[0], n_needed, replace=True)] + noise
             X_sub = np.vstack([X_sub, jittered_samples])
         X_sub_list.append(torch.tensor(X_sub, dtype=torch.float32, device=device))
+    if ordered:
+        # Order the list by cluster size (descending, first the largest cluster)
+        X_sub_list = [x for _, x in sorted(zip(cluster_size.values(), X_sub_list), key=lambda pair: pair[0], reverse=True)]
     return X_sub_list

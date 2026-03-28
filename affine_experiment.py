@@ -185,7 +185,10 @@ if __name__ == "__main__":
         # Label instances
         cluster_labels = cluster_alg.predict(seggregated_data)
         # Get "sub" datasets for each cluster
-        X_groups_list = get_groups(seggregated_data, cluster_alg)
+        if args.cluster_alg == "affinity" :
+            X_groups_list = get_groups(seggregated_data, cluster_alg, ordered = True)
+        else :
+            X_groups_list = get_groups(seggregated_data, cluster_alg)
         print("Length of X_groups_list:", len(X_groups_list))
         # If using affinity propagation, the number of clusters is not fixed, so we truncate to n_clusters
         if args.cluster_alg == "affinity" and len(X_groups_list) > args.n_clusters:
