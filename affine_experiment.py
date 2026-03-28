@@ -52,7 +52,7 @@ if __name__ == "__main__":
     parser.add_argument('--only_train', action='store_true', help='Only train the classifier and density estimator')
     parser.add_argument('--model', type=str, default='lg', help='Model to use for the classifier (default: logistic regression)',
                         choices=['lg', 'gbt','mlp'])
-    parser.add_argument('--cluster_alg', type=str, help='Clustering algorithm to use for subgrouping (default: KMedoids)',
+    parser.add_argument('--cluster_alg', default="kmedoids", type=str, help='Clustering algorithm to use for subgrouping (default: KMedoids)',
                         choices=['kmedoids', 'gmm', 'spectral', 'affinity'])
     args = parser.parse_args()
 
