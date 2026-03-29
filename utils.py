@@ -26,6 +26,8 @@ from group_cfx.transforms.utils import distortion_metric, get_lipschitz_bounds
 
 import optuna
 
+from joblib import Parallel, delayed
+
 
 def synthetic_2d(noise_scale=0, size = 1000, random_state=0) -> tuple[np.ndarray, np.ndarray]:
     x1 = uniform.rvs(loc=0, scale=1, size=size, random_state=random_state)
@@ -490,29 +492,49 @@ def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : 
     # Save to csv
     return df_results, tn - t0
 
-def cross_experiment_pymoo(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confidence, solver, device = "cpu",
-                           random_seed = 0, k_folds = 10):
+
+def cross_experiment_pymoo(transform, X_sub: torch.Tensor, f, y_prime, y_prime_confidence, solver, device="cpu",
+                           random_seed=0, k_folds=10, parallelize=True):
     if isinstance(transform, DirectOptimization):
-        return direct_experiment_pymoo(transform, X_sub, None, f, y_prime, y_prime_confidence, solver, device, random_seed)
-    # Divide X_sub in 10, use 9 for fitting the transform, 1 for testing iteratively
+        return direct_experiment_pymoo(transform, X_sub, None, f, y_prime, y_prime_confidence, solver, device,
+                                       random_seed)
+
     n = X_sub.shape[0]
     fold_size = n // k_folds
-    df_list = []
-    time_list = []
-    for i in range(k_folds):
+
+    # 1. Isolate the fold logic into a helper function to avoid repeating code
+    def process_fold(i):
         start = i * fold_size
-        end = (i + 1) * fold_size if i < (k_folds-1) else n
+        end = (i + 1) * fold_size if i < (k_folds - 1) else n
+
         X_sub_train = torch.cat([X_sub[:start], X_sub[end:]], dim=0)
         X_sub_test = X_sub[start:end]
 
-        df, time = direct_experiment_pymoo(transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, solver,
-                                           device, random_seed)
-
+        df, time_taken = direct_experiment_pymoo(
+            transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, solver, device, random_seed
+        )
         # Add to df a first column with the fold number
-        df.insert(0, 'CVF', i+1)
+        df.insert(0, 'CVF', i + 1)
+        return df, time_taken
 
-        df_list.append(df)
-        time_list.append(time)
+    # 2. Branch execution based on the parallelize flag
+    if parallelize:
+        # Run across all available CPU cores (n_jobs=-1)
+        results = Parallel(n_jobs=-1)(delayed(process_fold)(i) for i in range(k_folds))
+
+        # Unpack the list of tuples returned by joblib
+        df_list = [res[0] for res in results]
+        time_list = [res[1] for res in results]
+
+    else:
+        # Revert to the old sequential behavior
+        df_list = []
+        time_list = []
+        for i in range(k_folds):
+            df, time_taken = process_fold(i)
+            df_list.append(df)
+            time_list.append(time_taken)
+
     return pd.concat(df_list), np.mean(time_list)
 
 def get_transform(transform_str,X_sub, xl = None, xu = None, device ="cpu") :

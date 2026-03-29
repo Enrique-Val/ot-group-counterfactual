@@ -54,6 +54,7 @@ if __name__ == "__main__":
                         choices=['lg', 'gbt','mlp'])
     parser.add_argument('--cluster_alg', default="kmedoids", type=str, help='Clustering algorithm to use for subgrouping (default: KMedoids)',
                         choices=['kmedoids', 'gmm', 'spectral', 'affinity'])
+    parser.add_argument('--parallelize', action=argparse.BooleanOptionalAction, help='Whether to parallelize the experiments (only for non-math_opt)')
     args = parser.parse_args()
 
     np.random.seed(args.random_seed)
@@ -296,8 +297,8 @@ if __name__ == "__main__":
                     )
                 else:
                     raise ValueError("Unknown solver")
-                df_results, exec_time = cross_experiment_pymoo(transform, X_sub, f, y_prime, y_prime_conf, solver, random_seed= args.random_seed
-                )
+                df_results, exec_time = cross_experiment_pymoo(transform, X_sub, f, y_prime, y_prime_conf, solver,
+                                                               random_seed= args.random_seed, parallelize=args.parallelize)
                 print("Solved label", y_orig, "cluster", i, "in", exec_time, "seconds")
                 # Save results to csv
                 df_results.to_csv(os.path.join(transform_path, f'label_{y_orig}_cluster_{i}.csv'), index=False)
