@@ -54,6 +54,7 @@ if __name__ == "__main__":
                         choices=['lg', 'gbt','mlp'])
     parser.add_argument('--cluster_alg', default="kmedoids", type=str, help='Clustering algorithm to use for subgrouping (default: KMedoids)',
                         choices=['kmedoids', 'gmm', 'spectral', 'affinity'])
+    parser.add_argument('--alpha', type=float, default=0.8, help='Confidence level for the validity test (default: 0.8)')
     parser.add_argument('--parallelize', action=argparse.BooleanOptionalAction, help='Whether to parallelize the experiments (only for non-math_opt)')
     args = parser.parse_args()
 
@@ -65,7 +66,7 @@ if __name__ == "__main__":
     data_path = os.path.join(args.output_dir, f"data_{args.data_id}")
     models_path = os.path.join(data_path, "models")
     cluster_path = os.path.join(data_path,args.cluster_alg,str(args.n_clusters))
-    transform_path = os.path.join(cluster_path, args.model, "math_opt" if args.math_opt else "heuristic", args.transform)
+    transform_path = os.path.join(cluster_path, args.model, "math_opt" if args.math_opt else "heuristic", args.transform, "alpha_" + str(args.alpha))
     if not os.path.exists(transform_path):
         os.makedirs(transform_path)
     if not os.path.exists(models_path):
@@ -196,7 +197,7 @@ if __name__ == "__main__":
             X_groups_list = X_groups_list[:args.n_clusters]
 
         # Confidence for y_prime
-        y_prime_conf = 0.8
+        y_prime_conf = args.alpha
 
 
         # ============================
@@ -206,7 +207,6 @@ if __name__ == "__main__":
             transform = get_transform(args.transform, X_sub, xl = xl, xu=xu, device = "cpu")
 
             if args.math_opt :
-                solver = cv.MOSEK if transform.is_cvx() else "gurobi"
                 K_list = [1.01,1.5,2.0,3.5,5.0,7.5,10]
                 # First, check if transform is Wachter. If so, it has no param K
                 # Launch experiment only once and replicate for different K values

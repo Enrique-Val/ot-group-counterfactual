@@ -391,41 +391,58 @@ def direct_experiment(transform, X_sub_train : torch.Tensor, X_sub_test : torch.
     up_lip = bound_dict['max_expansion']
     return wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, validity, tn - t0
 
-def cross_experiment(transform, X_sub : torch.Tensor, f, y_prime, y_prime_confidence, K, solver, device = "cpu"):
+
+def _run_single_fold(i, fold_size, n, X_sub, transform, f, y_prime, y_prime_confidence, K, solver, device):
+    """Helper function to execute a single CV fold."""
+    start = i * fold_size
+    end = (i + 1) * fold_size if i < 9 else n
+    X_sub_train = torch.cat([X_sub[:start], X_sub[end:]], dim=0)
+    X_sub_test = X_sub[start:end]
+
+    return direct_experiment(transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, K, solver, device)
+
+
+def cross_experiment(transform, X_sub: torch.Tensor, f, y_prime, y_prime_confidence, K, solver, device="cpu",
+                     parallel=False, n_jobs=-1):
+    """
+    Args:
+        parallel (bool): If True, runs the 10-fold CV in parallel processes.
+        n_jobs (int): Number of parallel workers to use if parallel=True. Default -1 (all CPUs).
+    """
+    # 1. Handle Direct Optimization (CV does not make sense, just run on full data)
     if isinstance(transform, DirectOptimization):
         return direct_experiment(transform, X_sub, None, f, y_prime, y_prime_confidence, K, solver, device)
-    # else :
-    # Divide X_sub in 10, use 9 for fitting the transform, 1 for testing iteratively
+
+    # 2. Cross-Validation execution (Convex cases)
     n = X_sub.shape[0]
     fold_size = n // 10
-    wass_list = []
-    wass_test_list = []
-    low_lip_list = []
-    low_list_test_list = []
-    up_lip_list = []
-    up_list_test_list = []
-    validity_list = []
-    time_list = []
-    for i in range(10):
-        start = i * fold_size
-        end = (i + 1) * fold_size if i < 9 else n
-        X_sub_train = torch.cat([X_sub[:start], X_sub[end:]], dim=0)
-        X_sub_test = X_sub[start:end]
 
-        wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, validity, time = direct_experiment(transform, X_sub_train, X_sub_test, f, y_prime, y_prime_confidence, K, solver,
-                                       device)
-        if wass is None:
-            continue
-        wass_list.append(wass)
-        wass_test_list.append(wass_test)
-        low_lip_list.append(low_lip)
-        low_list_test_list.append(low_lip_test)
-        up_lip_list.append(up_lip)
-        up_list_test_list.append(up_lip_test)
-        validity_list.append(validity)
-        time_list.append(time)
-    return (np.mean(wass_list), np.mean(wass_test_list), np.mean(low_lip_list), np.mean(low_list_test_list),
-            np.mean(up_lip_list), np.mean(up_list_test_list), np.mean(validity_list), np.mean(time_list))
+    if parallel:
+        # Run folds concurrently
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(_run_single_fold)(i, fold_size, n, X_sub, transform, f, y_prime, y_prime_confidence, K, solver,
+                                      device)
+            for i in range(10)
+        )
+    else:
+        # Run folds sequentially
+        results = [
+            _run_single_fold(i, fold_size, n, X_sub, transform, f, y_prime, y_prime_confidence, K, solver, device)
+            for i in range(10)
+        ]
+
+    # Filter out failed folds (where 'wass' at index 0 is None)
+    valid_results = [res for res in results if res[0] is not None]
+
+    # Edge case: If all folds failed
+    if not valid_results:
+        return None, None, None, None, None, None, 0, 0
+
+    # Unpack the valid results cleanly using zip
+    wass, wass_test, low_lip, low_lip_test, up_lip, up_lip_test, validity, times = zip(*valid_results)
+
+    return (np.mean(wass), np.mean(wass_test), np.mean(low_lip), np.mean(low_lip_test),
+            np.mean(up_lip), np.mean(up_lip_test), np.mean(validity), np.mean(times))
 
 def direct_experiment_pymoo(transform, X_sub_train : torch.Tensor, X_sub_test : torch.Tensor, f, y_prime,
                             y_prime_confidence, solver, device = "cpu", random_seed = 0):
