@@ -207,6 +207,7 @@ if __name__ == "__main__":
             transform = get_transform(args.transform, X_sub, xl = xl, xu=xu, device = "cpu")
 
             if args.math_opt :
+                solver = cv.MOSEK if transform.is_cvx() else "gurobi"
                 K_list = [1.01,1.5,2.0,3.5,5.0,7.5,10]
                 # First, check if transform is Wachter. If so, it has no param K
                 # Launch experiment only once and replicate for different K values
