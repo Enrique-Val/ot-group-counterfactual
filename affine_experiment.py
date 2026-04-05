@@ -214,7 +214,7 @@ if __name__ == "__main__":
                 if args.transform == "Wachter":
                     lenK = len(K_list)
                     wass, _, low_lip, _, up_lip, _, _, exec_time = cross_experiment(transform, X_sub, f, y_prime, y_prime_conf,
-                                                 solver=solver, K=None)
+                                                 solver=solver, K=None, parallel= args.parallelize)
                     print("Exec time label", y_orig, "cluster", i, "Wachter:", exec_time, "seconds")
                     # Create df and save to csv
                     df_results = pd.DataFrame({'K' : K_list, 'Wasserstein': [wass]*lenK, 'Wasserstein test': [wass]*lenK,
